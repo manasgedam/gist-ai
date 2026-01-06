@@ -1,0 +1,41 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+.env
+build/
+dist/
+*.egg-info/
+
+# --- Project Specific Media ---
+# We ignore these because they are huge and will bloat your GitHub repo
+downloads/
+exports/
+temp_*.mp4
+*.mp3
+*.m4a
+*.json
+!example_map.json
+
+# --- Authentication & Cache ---
+# Keep your login sessions and cookies off the internet!
+cookies.txt
+.cache/
+.pytest_cache/
+
+# --- OS Specific ---
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# --- Database / Supabase ---
+# Only ignore if you have local DB dumps
+*.sql
+*.sqlite
