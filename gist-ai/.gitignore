@@ -17,16 +17,15 @@ dist/
 build/
 
 # Output files (videos, audio, transcripts)
-gist-ai/output/
+output/
 *.mp4
 *.mp3
 *.wav
 *.m4a
 *.aac
-
-# Keep JSON structure files but ignore large output JSONs
-gist-ai/output/*.json
-!gist-ai/output/.gitkeep
+*.json
+!requirements.txt
+!package.json
 
 # Temporary files
 temp/
