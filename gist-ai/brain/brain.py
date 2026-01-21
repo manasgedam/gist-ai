@@ -142,7 +142,7 @@ Output ONLY valid JSON, no extra text."""
     def build_stage2_prompt(self, formatted_transcript, idea_title, idea_description):
         """
         STAGE 2: Find ALL segments that contribute to one specific idea
-        UPDATED: Stricter segmentation rules
+        UPDATED: Stricter minimum durations, merging guidance
         """
         prompt = f"""You are a video editor finding ALL moments that contribute to a specific idea.
 
@@ -156,33 +156,35 @@ TRANSCRIPT:
 Your task: Find ALL segments needed to tell this ONE specific story.
 
 CRITICAL SEGMENTATION RULES:
-1. Each segment should be 15-60 seconds long (not 2-5 seconds)
-2. Only create a new segment when there's a BREAK in the narrative (not for every sentence)
+1. MINIMUM segment duration: 15 seconds (not 2-10 seconds)
+2. Only create a new segment when there's a CLEAR BREAK in the narrative
 3. If someone is explaining one continuous point, keep it as ONE segment
-4. Segments can be scattered across the video, but should not micro-chop continuous speech
-5. Target: 1-5 segments total (not 20+)
+4. If segments would be adjacent or very close (within 5 seconds), MERGE them into one
+5. Target: 1-4 segments total (not 5-10+)
 6. Total duration across all segments: 30-90 seconds
 
-GOOD SEGMENTATION (continuous speech = one segment):
-✓ [02:00-02:45] "Hook and setup of the problem"
-✓ [05:30-06:15] "Resolution and answer"
-Total: 2 segments, 90 seconds
-
-BAD SEGMENTATION (micro-chopping):
-✗ [02:00-02:05] "First sentence"
-✗ [02:05-02:10] "Second sentence"
-✗ [02:10-02:15] "Third sentence"
-Total: 40 segments, unusable
-
 WHEN TO CREATE A NEW SEGMENT:
-- Speaker moves to different topic and comes back later
-- There's a tangent you want to skip
-- The idea is discussed at start and resolved at end
+- Speaker discusses idea at 01:00, then completely different topic, then returns to idea at 05:00
+- There's a tangent you want to skip that's >10 seconds long
+- The idea has a clear setup → break → resolution pattern
 
 WHEN NOT TO CREATE A NEW SEGMENT:
-- Speaker is continuously developing the same point
-- It's just the next sentence
-- You're still in the same explanation
+- Speaker pauses briefly (1-3 seconds)
+- Speaker says "um" or takes a breath
+- It's just the next sentence in the same explanation
+- Segments would be less than 5 seconds apart (merge them instead)
+
+EXAMPLE - GOOD (merged continuous speech):
+✓ Segments: [{{"start": "02:00", "end": "02:45"}}]  
+  Reason: 45 seconds of continuous explanation, no breaks
+
+EXAMPLE - BAD (micro-chopped):
+✗ Segments: [
+    {{"start": "02:00", "end": "02:08"}},
+    {{"start": "02:08", "end": "02:15"}},
+    {{"start": "02:15", "end": "02:25"}}
+  ]
+  Reason: These are adjacent and should be ONE segment [02:00-02:25]
 
 OUTPUT FORMAT (JSON):
 {{
@@ -194,8 +196,10 @@ OUTPUT FORMAT (JSON):
   "transcript_excerpt": "Key quotes that show the hook and resolution"
 }}
 
-Be selective. Find the essential moments only.
-If the idea would require more than 90 seconds or 5 segments, it's too broad.
+STRICT REQUIREMENTS:
+- Each segment MUST be at least 15 seconds
+- If the idea needs more than 4 segments or 90 seconds total, it's too broad
+- Merge adjacent or near-adjacent segments
 
 Output ONLY valid JSON, no extra text."""
 
@@ -287,69 +291,90 @@ Output ONLY valid JSON, no extra text."""
         """
         STAGE 1: Identify complete ideas
         Returns: List of idea titles and descriptions
+        UPDATED: Better error handling
         """
         print("\n=== STAGE 1: Identifying complete ideas ===")
+        print("  → Analyzing video content...")
         
-        prompt = self.build_stage1_prompt(formatted_transcript)
-        response = self.query_llm(prompt)
-        ideas_list = self.parse_llm_response(response)
-        
-        print(f"Found {len(ideas_list.get('ideas', []))} complete ideas")
-        
-        return ideas_list.get('ideas', [])
+        try:
+            prompt = self.build_stage1_prompt(formatted_transcript)
+            response = self.query_llm(prompt)
+            ideas_list = self.parse_llm_response(response)
+            
+            num_ideas = len(ideas_list.get('ideas', []))
+            
+            if num_ideas == 0:
+                print("  ⚠ No complete ideas identified")
+            else:
+                print(f"  ✓ Found {num_ideas} complete ideas")
+            
+            return ideas_list.get('ideas', [])
+            
+        except Exception as e:
+            raise RuntimeError(f"Stage 1 failed: {str(e)}")
     
     def run_stage2(self, formatted_transcript, idea):
         """
         STAGE 2: Find all segments for one specific idea
         Returns: Segments with timestamps
+        UPDATED: Better error handling
         """
-        print(f"\n=== STAGE 2: Finding segments for '{idea['title']}' ===")
+        print(f"  → Finding segments for: '{idea['title']}'")
         
-        prompt = self.build_stage2_prompt(
-            formatted_transcript,
-            idea['title'],
-            idea['description']
-        )
-        
-        response = self.query_llm(prompt)
-        segments_data = self.parse_llm_response(response)
-        
-        print(f"Found {len(segments_data.get('segments', []))} segments")
-        
-        return segments_data
+        try:
+            prompt = self.build_stage2_prompt(
+                formatted_transcript,
+                idea['title'],
+                idea['description']
+            )
+            
+            response = self.query_llm(prompt)
+            segments_data = self.parse_llm_response(response)
+            
+            num_segments = len(segments_data.get('segments', []))
+            print(f"    ✓ Found {num_segments} segments")
+            
+            return segments_data
+            
+        except Exception as e:
+            raise RuntimeError(f"Stage 2 failed for '{idea['title']}': {str(e)}")
     
     def enrich_segments(self, segments_data, transcript_data, idea_title):
         """
         Convert MM:SS timestamps to seconds
         Validate segments
-        UPDATED: Add validation for duration and segment count
+        UPDATED: Add padding and stricter validation
         """
         segments = []
         total_duration = 0
+        
+        PADDING_SECONDS = 1.0  # Add 1s padding at start/end for natural cuts
         
         for segment in segments_data.get('segments', []):
             start_seconds = self.convert_timestamp_to_seconds(segment['start'])
             end_seconds = self.convert_timestamp_to_seconds(segment['end'])
             
+            # Add padding (but don't go below 0 or beyond video duration)
+            start_with_padding = max(0, start_seconds - PADDING_SECONDS)
+            end_with_padding = min(transcript_data['duration'], end_seconds + PADDING_SECONDS)
+            
             # Validate timestamps
-            if start_seconds >= transcript_data['duration']:
-                print(f"Warning: Invalid start time {segment['start']}")
+            if start_with_padding >= transcript_data['duration']:
+                print(f"    ⚠ Invalid start time {segment['start']}")
                 continue
             
-            if end_seconds > transcript_data['duration']:
-                end_seconds = transcript_data['duration']
+            segment_duration = end_with_padding - start_with_padding
             
-            segment_duration = end_seconds - start_seconds
-            
-            # Warn about micro-segments (too short)
-            if segment_duration < 10:
-                print(f"Warning: Very short segment ({segment_duration}s) in '{idea_title}' - may be micro-chopped")
+            # STRICT: Reject micro-segments
+            if segment_duration < 15:
+                print(f"    ⚠ Segment too short ({segment_duration:.1f}s): {segment['start']}-{segment['end']} - REJECTED")
+                continue
             
             segments.append({
                 'start_time_formatted': segment['start'],
                 'end_time_formatted': segment['end'],
-                'start_seconds': start_seconds,
-                'end_seconds': end_seconds,
+                'start_seconds': start_with_padding,  # With padding
+                'end_seconds': end_with_padding,      # With padding
                 'duration_seconds': segment_duration,
                 'purpose': segment.get('purpose', '')
             })
@@ -385,34 +410,40 @@ Output ONLY valid JSON, no extra text."""
         # STAGE 2: Find segments for each idea
         enriched_ideas = []
         
+        if ideas_list:
+            print(f"\n=== STAGE 2: Finding segments for {len(ideas_list)} ideas ===")
+        
         for idx, idea in enumerate(ideas_list, 1):
-            print(f"\n--- Processing idea {idx}/{len(ideas_list)} ---")
+            print(f"\n[{idx}/{len(ideas_list)}] Processing: '{idea['title']}'")
             
             try:
                 segments_data = self.run_stage2(formatted_transcript, idea)
                 segments, total_duration = self.enrich_segments(segments_data, transcript_data, idea['title'])
                 
                 if not segments:
-                    print(f"Warning: No valid segments for '{idea['title']}'")
+                    print(f"    ⚠ No valid segments found (all rejected for being too short)")
                     continue
                 
                 # VALIDATION: Reject ideas that are too long or have too many segments
-                if total_duration > 120:  # 2 minutes max (allowing some buffer beyond 90s)
-                    print(f"⚠ REJECTED: '{idea['title']}' is too long ({total_duration}s) - likely a topic, not a moment")
+                if total_duration > 120:  # 2 minutes max
+                    print(f"    ⚠ REJECTED: Too long ({total_duration}s) - likely a topic, not a moment")
                     continue
                 
-                if len(segments) > 8:  # Max 8 segments
-                    print(f"⚠ REJECTED: '{idea['title']}' has too many segments ({len(segments)}) - likely micro-chopped")
+                if len(segments) > 5:  # Max 5 segments (stricter than before)
+                    print(f"    ⚠ REJECTED: Too many segments ({len(segments)}) - likely micro-chopped")
                     continue
                 
-                if total_duration < 20:  # Min 20 seconds
-                    print(f"⚠ REJECTED: '{idea['title']}' is too short ({total_duration}s) - incomplete idea")
+                if total_duration < 25:  # Min 25 seconds (stricter)
+                    print(f"    ⚠ REJECTED: Too short ({total_duration}s) - incomplete idea")
                     continue
                 
-                # Warn if mostly micro-segments
+                # STRICT: Check average segment duration
                 avg_segment_duration = total_duration / len(segments)
-                if avg_segment_duration < 12 and len(segments) > 3:
-                    print(f"⚠ WARNING: '{idea['title']}' may be micro-chopped (avg {avg_segment_duration:.1f}s per segment)")
+                if avg_segment_duration < 15:
+                    print(f"    ⚠ REJECTED: Micro-chopped (avg {avg_segment_duration:.1f}s per segment, need 15s+)")
+                    continue
+                
+                print(f"    ✓ ACCEPTED: {len(segments)} segments, {total_duration:.1f}s total, avg {avg_segment_duration:.1f}s per segment")
                 
                 enriched_ideas.append({
                     'title': idea['title'],
@@ -425,7 +456,7 @@ Output ONLY valid JSON, no extra text."""
                 })
                 
             except Exception as e:
-                print(f"Error processing idea '{idea['title']}': {e}")
+                print(f"    ✗ Error: {str(e)}")
                 continue
         
         # Build final output

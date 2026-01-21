@@ -104,54 +104,55 @@ class Stitcher:
         
         return output_path
     
-    def stitch_idea(self, video_path, idea, idea_index):
+    def stitch_idea(self, video_path, idea, idea_index, total_ideas):
         """
         Stitch one complete idea from multiple segments
         Returns: path to output video
+        UPDATED: Better progress indicators
         """
-        print(f"\n--- Stitching idea {idea_index}: '{idea['title']}' ---")
-        print(f"Segments: {idea['segment_count']}")
-        print(f"Total duration: {idea['total_duration_seconds']}s")
+        print(f"\n[{idea_index}/{total_ideas}] '{idea['title']}'")
+        print(f"  → {idea['segment_count']} segments, {idea['total_duration_seconds']}s total")
         
         segment_paths = []
         
-        # Extract each segment
-        for idx, segment in enumerate(idea['segments'], 1):
-            print(f"  Extracting segment {idx}/{idea['segment_count']} "
-                  f"[{segment['start_time_formatted']}-{segment['end_time_formatted']}]")
+        try:
+            # Extract each segment
+            for idx, segment in enumerate(idea['segments'], 1):
+                temp_segment_path = self.temp_dir / f"idea_{idea_index}_seg_{idx}.mp4"
+                
+                self.extract_segment(
+                    video_path,
+                    segment['start_seconds'],
+                    segment['end_seconds'],
+                    temp_segment_path
+                )
+                
+                segment_paths.append(temp_segment_path)
+                print(f"    [{idx}/{idea['segment_count']}] Extracted {segment['start_time_formatted']}-{segment['end_time_formatted']}")
             
-            temp_segment_path = self.temp_dir / f"idea_{idea_index}_seg_{idx}.mp4"
+            # Concatenate segments
+            safe_title = "".join(c if c.isalnum() or c in (' ', '-', '_') else '_' 
+                               for c in idea['title'])
+            safe_title = safe_title[:50]  # Limit length
             
-            self.extract_segment(
-                video_path,
-                segment['start_seconds'],
-                segment['end_seconds'],
-                temp_segment_path
-            )
+            output_filename = f"idea_{idea_index}_{safe_title}.mp4"
+            output_path = self.output_dir / output_filename
             
-            segment_paths.append(temp_segment_path)
-        
-        # Concatenate segments
-        print(f"  Concatenating {len(segment_paths)} segments...")
-        
-        # Sanitize filename (remove special chars)
-        safe_title = "".join(c if c.isalnum() or c in (' ', '-', '_') else '_' 
-                           for c in idea['title'])
-        safe_title = safe_title[:50]  # Limit length
-        
-        output_filename = f"idea_{idea_index}_{safe_title}.mp4"
-        output_path = self.output_dir / output_filename
-        
-        if len(segment_paths) == 1:
-            # Single segment, just rename
-            segment_paths[0].rename(output_path)
-        else:
-            # Multiple segments, concatenate
-            self.concatenate_segments(segment_paths, output_path)
-        
-        print(f"  ✓ Created: {output_path}")
-        
-        return output_path
+            if len(segment_paths) == 1:
+                # Single segment, just rename
+                segment_paths[0].rename(output_path)
+                print(f"  ✓ Created: {output_filename}")
+            else:
+                # Multiple segments, concatenate
+                print(f"  → Concatenating {len(segment_paths)} segments...")
+                self.concatenate_segments(segment_paths, output_path)
+                print(f"  ✓ Created: {output_filename}")
+            
+            return output_path
+            
+        except Exception as e:
+            print(f"  ✗ Failed: {str(e)}")
+            raise
     
     def cleanup_temp_files(self):
         """Remove temporary segment files"""
@@ -166,35 +167,42 @@ class Stitcher:
         Full stitcher pipeline
         Input: ideas JSON, transcript JSON
         Output: Multiple MP4 files (one per idea)
+        UPDATED: Better progress and error handling
         """
         # Load data
         ideas_data = self.load_ideas(ideas_path)
         transcript_data = self.load_transcript(transcript_path)
         
         # Get video file path
-        video_path = Path(transcript_data['video_file_path'])
+        video_path = Path(transcript_data.get('video_file_path', ''))
         
         if not video_path.exists():
-            raise FileNotFoundError(f"Video file not found: {video_path}")
+            raise FileNotFoundError(
+                f"Video file not found: {video_path}\n"
+                f"Make sure you ran ingestion with the updated code that saves video files."
+            )
         
-        print(f"Source video: {video_path}")
+        print(f"Source video: {video_path.name}\n")
         
         # Process each idea
         output_paths = []
+        total_ideas = len(ideas_data['ideas'])
         
         for idx, idea in enumerate(ideas_data['ideas'], 1):
             try:
-                output_path = self.stitch_idea(video_path, idea, idx)
+                output_path = self.stitch_idea(video_path, idea, idx, total_ideas)
                 output_paths.append(output_path)
             except Exception as e:
-                print(f"  ✗ Failed to stitch idea {idx}: {e}")
+                print(f"  ✗ Skipped due to error")
                 continue
         
         # Cleanup
         self.cleanup_temp_files()
         
-        print(f"\n✓ Stitching complete")
-        print(f"✓ Created {len(output_paths)} video clips")
+        if not output_paths:
+            raise RuntimeError("No video clips were created successfully")
+        
+        print(f"\n✓ Created {len(output_paths)}/{total_ideas} video clips")
         
         return output_paths
 

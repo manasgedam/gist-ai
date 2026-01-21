@@ -24,59 +24,81 @@ class VideoIngestion:
         """
         Download audio AND video from YouTube URL
         Returns: paths to audio and video files
+        UPDATED: Better error handling
         """
         print(f"Downloading from: {youtube_url}")
         
-        # Download video file (for stitcher later)
-        video_opts = {
-            'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
-            'outtmpl': str(self.output_dir / '%(id)s_video.%(ext)s'),
-            'quiet': False,
-        }
-        
-        with yt_dlp.YoutubeDL(video_opts) as ydl:
-            info = ydl.extract_info(youtube_url, download=True)
-            video_id = info['id']
-            video_path = self.output_dir / f"{video_id}_video.mp4"
-        
-        print(f"Video downloaded: {video_path}")
-        
-        # Download audio (for transcription)
-        audio_opts = {
-            'format': 'bestaudio/best',
-            'postprocessors': [{
-                'key': 'FFmpegExtractAudio',
-                'preferredcodec': 'mp3',
-                'preferredquality': '192',
-            }],
-            'outtmpl': str(self.output_dir / '%(id)s_audio.%(ext)s'),
-            'quiet': False,
-        }
-        
-        with yt_dlp.YoutubeDL(audio_opts) as ydl:
-            ydl.extract_info(youtube_url, download=True)
-            audio_path = self.output_dir / f"{video_id}_audio.mp3"
-        
-        print(f"Audio downloaded: {audio_path}")
-        
-        return audio_path, video_path, video_id
+        try:
+            # Download video file (for stitcher later)
+            print("  → Downloading video...")
+            video_opts = {
+                'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+                'outtmpl': str(self.output_dir / '%(id)s_video.%(ext)s'),
+                'quiet': True,
+                'no_warnings': True,
+            }
+            
+            with yt_dlp.YoutubeDL(video_opts) as ydl:
+                info = ydl.extract_info(youtube_url, download=True)
+                video_id = info['id']
+                video_path = self.output_dir / f"{video_id}_video.mp4"
+            
+            if not video_path.exists():
+                raise FileNotFoundError(f"Video file not created: {video_path}")
+            
+            print(f"  ✓ Video downloaded: {video_path.name}")
+            
+            # Download audio (for transcription)
+            print("  → Downloading audio...")
+            audio_opts = {
+                'format': 'bestaudio/best',
+                'postprocessors': [{
+                    'key': 'FFmpegExtractAudio',
+                    'preferredcodec': 'mp3',
+                    'preferredquality': '192',
+                }],
+                'outtmpl': str(self.output_dir / '%(id)s_audio.%(ext)s'),
+                'quiet': True,
+                'no_warnings': True,
+            }
+            
+            with yt_dlp.YoutubeDL(audio_opts) as ydl:
+                ydl.extract_info(youtube_url, download=True)
+                audio_path = self.output_dir / f"{video_id}_audio.mp3"
+            
+            if not audio_path.exists():
+                raise FileNotFoundError(f"Audio file not created: {audio_path}")
+            
+            print(f"  ✓ Audio downloaded: {audio_path.name}")
+            
+            return audio_path, video_path, video_id
+            
+        except yt_dlp.utils.DownloadError as e:
+            raise RuntimeError(f"Download failed: Invalid URL or video unavailable - {str(e)}")
+        except Exception as e:
+            raise RuntimeError(f"Download failed: {str(e)}")
     
     def transcribe(self, audio_path):
         """
         Transcribe audio with word-level timestamps
         Returns: transcript data structure
+        UPDATED: Better progress indication
         """
-        print("Transcribing audio (this may take a few minutes)...")
+        print("  → Transcribing audio (this may take a few minutes)...")
         
-        # Transcribe with word-level timestamps
-        result = self.model.transcribe(
-            str(audio_path),
-            word_timestamps=True,
-            verbose=False
-        )
-        
-        print("Transcription complete.")
-        return result
+        try:
+            # Transcribe with word-level timestamps
+            result = self.model.transcribe(
+                str(audio_path),
+                word_timestamps=True,
+                verbose=False
+            )
+            
+            print(f"  ✓ Transcription complete ({len(result['segments'])} segments)")
+            return result
+            
+        except Exception as e:
+            raise RuntimeError(f"Transcription failed: {str(e)}")
     
     def format_output(self, transcript_result, video_id, youtube_url, video_path):
         """
@@ -133,7 +155,7 @@ class VideoIngestion:
         Full ingestion pipeline
         Input: YouTube URL
         Output: JSON file path
-        UPDATED: Downloads both video and audio
+        UPDATED: Edge case handling
         """
         # Step 1: Download audio and video
         audio_path, video_path, video_id = self.download_audio(youtube_url)
@@ -141,13 +163,36 @@ class VideoIngestion:
         # Step 2: Transcribe
         transcript_result = self.transcribe(audio_path)
         
-        # Step 3: Format as clean JSON
+        # Step 3: Validate transcript quality
+        if not transcript_result.get('segments'):
+            raise RuntimeError("Transcription failed: No speech detected in video")
+        
+        duration = transcript_result['segments'][-1]['end'] if transcript_result['segments'] else 0
+        
+        # Edge case: Video too short
+        if duration < 120:  # Less than 2 minutes
+            print(f"\n  ⚠ WARNING: Video is very short ({duration:.0f}s)")
+            print(f"  ⚠ Short videos rarely have complete standalone ideas")
+            print(f"  ⚠ Continuing anyway, but Brain may find no ideas\n")
+        
+        # Edge case: Video too long
+        if duration > 1800:  # More than 30 minutes
+            print(f"\n  ⚠ WARNING: Video is very long ({duration/60:.1f} minutes)")
+            print(f"  ⚠ This may take a while and cost more API credits")
+            print(f"  ⚠ Consider processing shorter videos first\n")
+        
+        # Edge case: Language detection
+        detected_language = transcript_result.get('language', 'unknown')
+        if detected_language != 'en' and detected_language != 'unknown':
+            print(f"\n  ⚠ WARNING: Detected language is '{detected_language}', not English")
+            print(f"  ⚠ Brain prompts are in English and may not work well")
+            print(f"  ⚠ Results may be unreliable\n")
+        
+        # Step 4: Format as clean JSON
         output_data = self.format_output(transcript_result, video_id, youtube_url, video_path)
         
-        # Step 4: Save
+        # Step 5: Save
         json_path = self.save_json(output_data, video_id)
-        
-        # Note: Keep both audio and video files for later stages
         
         return json_path
 
