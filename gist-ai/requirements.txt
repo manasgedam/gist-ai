@@ -1,8 +1,0 @@
-yt-dlp
-openai-whisper
-ffmpeg
-ollama
-openai
-dotenv
-groq
-moviepy
