@@ -1,77 +1,57 @@
 'use client';
 
-import { CheckCircle2 } from 'lucide-react';
-
-interface ProcessingStep {
-  id: string;
-  label: string;
-  status: 'pending' | 'active' | 'complete';
-}
-
-const PROCESSING_STEPS: ProcessingStep[] = [
-  { id: '1', label: 'Transcribing video', status: 'complete' },
-  { id: '2', label: 'Understanding topics and ideas', status: 'active' },
-  { id: '3', label: 'Grouping related moments', status: 'pending' },
-  { id: '4', label: 'Ranking short-form potential', status: 'pending' },
-];
+import { Loader, CheckCircle2 } from 'lucide-react';
 
 export function AIProcessingState() {
-  const completedSteps = PROCESSING_STEPS.filter(s => s.status === 'complete').length;
-  const totalSteps = PROCESSING_STEPS.length;
-  const progress = (completedSteps / totalSteps) * 100;
-
   return (
-    <div className="space-y-4 rounded-lg border border-border bg-secondary p-4">
-      <div>
-        <p className="text-sm font-medium text-foreground">Processing Your Video</p>
-        <p className="mt-1 text-xs text-muted-foreground">AI is analyzing your video to find the best short-form content</p>
+    <div className="rounded-lg border border-border bg-secondary/50 p-4 space-y-4">
+      <div className="space-y-3">
+        {/* Step 1: Upload */}
+        <div className="flex items-start gap-3">
+          <div className="rounded-full bg-primary/10 p-1.5 mt-0.5">
+            <CheckCircle2 className="h-4 w-4 text-primary" />
+          </div>
+          <div className="flex-1">
+            <p className="text-sm font-medium text-foreground">Video uploaded</p>
+            <p className="text-xs text-muted-foreground mt-0.5">Ready for processing</p>
+          </div>
+        </div>
+
+        {/* Step 2: Analyzing */}
+        <div className="flex items-start gap-3">
+          <div className="rounded-full bg-primary/10 p-1.5 mt-0.5 animate-pulse">
+            <Loader className="h-4 w-4 text-primary animate-spin" />
+          </div>
+          <div className="flex-1">
+            <p className="text-sm font-medium text-foreground">Analyzing content</p>
+            <p className="text-xs text-muted-foreground mt-0.5">Detecting key moments and topics</p>
+          </div>
+        </div>
+
+        {/* Step 3: Generating Ideas */}
+        <div className="flex items-start gap-3 opacity-50">
+          <div className="rounded-full bg-secondary border border-border p-1.5 mt-0.5">
+            <div className="h-4 w-4 border-2 border-border border-t-primary rounded-full" />
+          </div>
+          <div className="flex-1">
+            <p className="text-sm font-medium text-foreground">Generating ideas</p>
+            <p className="text-xs text-muted-foreground mt-0.5">Creating AI-powered suggestions</p>
+          </div>
+        </div>
       </div>
 
       {/* Progress Bar */}
-      <div className="space-y-2">
-        <div className="flex justify-between text-xs text-muted-foreground">
-          <span>Progress</span>
-          <span>{completedSteps} of {totalSteps}</span>
+      <div className="pt-2">
+        <div className="flex justify-between items-center mb-2">
+          <span className="text-xs font-medium text-muted-foreground">Processing</span>
+          <span className="text-xs font-medium text-primary">45%</span>
         </div>
-        <div className="h-1.5 overflow-hidden rounded-full bg-border">
+        <div className="h-1.5 bg-secondary rounded-full overflow-hidden">
           <div
             className="h-full bg-primary transition-all duration-500"
-            style={{ width: `${progress}%` }}
+            style={{ width: '45%' }}
           />
         </div>
-      </div>
-
-      {/* Processing Steps */}
-      <div className="space-y-2">
-        {PROCESSING_STEPS.map((step) => (
-          <div key={step.id} className="flex items-center gap-2">
-            <div
-              className={`flex h-5 w-5 items-center justify-center rounded-full flex-shrink-0 ${
-                step.status === 'complete'
-                  ? 'bg-primary'
-                  : step.status === 'active'
-                    ? 'border-2 border-primary bg-background'
-                    : 'border-2 border-border bg-background'
-              }`}
-            >
-              {step.status === 'complete' && (
-                <CheckCircle2 className="h-3 w-3 text-primary-foreground" />
-              )}
-              {step.status === 'active' && (
-                <div className="h-2 w-2 rounded-full bg-primary animate-pulse" />
-              )}
-            </div>
-            <span
-              className={`text-xs ${
-                step.status === 'complete'
-                  ? 'text-foreground'
-                  : 'text-muted-foreground'
-              }`}
-            >
-              {step.label}
-            </span>
-          </div>
-        ))}
       </div>
     </div>
   );

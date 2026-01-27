@@ -36,6 +36,10 @@ class VideoIngestion:
                 'outtmpl': str(self.output_dir / '%(id)s_video.%(ext)s'),
                 'quiet': True,
                 'no_warnings': True,
+                # Add user-agent and headers to bypass 403 errors
+                'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'referer': 'https://www.youtube.com/',
+                'extractor_args': {'youtube': {'player_client': ['android', 'web']}},
             }
             
             with yt_dlp.YoutubeDL(video_opts) as ydl:
@@ -60,6 +64,10 @@ class VideoIngestion:
                 'outtmpl': str(self.output_dir / '%(id)s_audio.%(ext)s'),
                 'quiet': True,
                 'no_warnings': True,
+                # Add user-agent and headers to bypass 403 errors
+                'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'referer': 'https://www.youtube.com/',
+                'extractor_args': {'youtube': {'player_client': ['android', 'web']}},
             }
             
             with yt_dlp.YoutubeDL(audio_opts) as ydl:

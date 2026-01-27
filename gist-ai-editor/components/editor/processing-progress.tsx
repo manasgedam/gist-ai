@@ -10,7 +10,7 @@ interface ProcessingProgressProps {
 }
 
 const STAGES = [
-  { id: 'PENDING', label: 'Queued', description: 'Waiting to start...' },
+  { id: 'PENDING', label: 'Queued', description: 'Video queued for processing' },
   { id: 'INGESTING', label: 'Ingesting', description: 'Downloading video and extracting audio' },
   { id: 'TRANSCRIBING', label: 'Transcribing', description: 'Converting speech to text' },
   { id: 'UNDERSTANDING', label: 'Understanding', description: 'Analyzing semantic content' },
@@ -24,12 +24,16 @@ export function ProcessingProgress({
   message,
   error,
 }: ProcessingProgressProps) {
+  // Debug logging
+  console.log('🎨 ProcessingProgress render:', { currentStage, progress, message, error });
+  
   const getCurrentStageIndex = () => {
     if (!currentStage) return -1;
     return STAGES.findIndex((s) => s.id === currentStage);
   };
 
   const currentIndex = getCurrentStageIndex();
+  console.log('📍 Current stage index:', currentIndex, 'Stage:', currentStage);
 
   const getStageStatus = (index: number) => {
     if (error) return 'error';
@@ -123,7 +127,11 @@ export function ProcessingProgress({
                       : 'text-muted-foreground/60'
                   }`}
                 >
-                  {status === 'active' && message ? message : stage.description}
+                  {status === 'complete' 
+                    ? 'Complete' 
+                    : status === 'active' && message 
+                    ? message 
+                    : stage.description}
                 </p>
               </div>
 

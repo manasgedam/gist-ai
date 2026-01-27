@@ -4,6 +4,10 @@ import { videoApi, Idea, StatusResponse } from '../api/client';
 export interface UseVideoProcessingReturn {
   // State
   videoId: string | null;
+  videoUrl: string | null;
+  videoStreamUrl: string | null;
+  videoDuration: number | null;
+  videoTitle: string | null;
   status: string | null;
   progress: number;
   currentStage: string | null;
@@ -20,6 +24,10 @@ export interface UseVideoProcessingReturn {
 
 export function useVideoProcessing(): UseVideoProcessingReturn {
   const [videoId, setVideoId] = useState<string | null>(null);
+  const [videoUrl, setVideoUrl] = useState<string | null>(null);
+  const [videoStreamUrl, setVideoStreamUrl] = useState<string | null>(null);
+  const [videoDuration, setVideoDuration] = useState<number | null>(null);
+  const [videoTitle, setVideoTitle] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [progress, setProgress] = useState<number>(0);
   const [currentStage, setCurrentStage] = useState<string | null>(null);
@@ -29,47 +37,84 @@ export function useVideoProcessing(): UseVideoProcessingReturn {
 
   const wsRef = useRef<WebSocket | null>(null);
   const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  
+  // CRITICAL FIX: Use ref to store videoId so WebSocket handler always has latest value
+  const videoIdRef = useRef<string | null>(null);
+  
+  // Keep videoIdRef in sync with videoId state
+  useEffect(() => {
+    videoIdRef.current = videoId;
+  }, [videoId]);
 
   const isProcessing = status !== null && status !== 'COMPLETE' && status !== 'FAILED';
   const isComplete = status === 'COMPLETE';
 
-  // Handle WebSocket messages
-  const handleWebSocketMessage = useCallback((message: any) => {
-    console.log('WebSocket message:', message);
+  // Fetch video metadata when video ID is available
+  const fetchVideoMetadata = useCallback(async (vid: string) => {
+    try {
+      const timeline = await videoApi.getVideoTimeline(vid);
+      setVideoStreamUrl(timeline.video_url);
+      setVideoDuration(timeline.duration);
+      setVideoTitle(timeline.title);
+    } catch (err) {
+      console.error('Failed to fetch video metadata:', err);
+    }
+  }, []);
 
-    switch (message.type) {
+  // CRITICAL FIX: Define WebSocket handler that reads from ref, not closure
+  const handleWebSocketMessage = useCallback((messageData: any) => {
+    console.log('🔔 WebSocket message received:', messageData);
+    
+    // Use ref to get current videoId (avoids stale closure)
+    const currentVideoId = videoIdRef.current;
+
+    switch (messageData.type) {
       case 'progress':
-        setStatus(message.stage);
-        setProgress(message.progress || 0);
-        setCurrentStage(message.stage);
-        setMessage(message.message);
+        console.log('✅ Processing progress update:', messageData.stage, messageData.progress + '%');
+        setStatus(messageData.stage);
+        setProgress(messageData.progress || 0);
+        setCurrentStage(messageData.stage);
+        setMessage(messageData.message);
+        break;
+
+      case 'video_ready':
+        console.log('📹 Video ready event received');
+        if (currentVideoId) {
+          fetchVideoMetadata(currentVideoId);
+        }
+        setMessage(messageData.message || 'Video ready for playback');
         break;
 
       case 'stage_complete':
-        setCurrentStage(message.next_stage);
+        console.log('✅ Stage complete:', messageData.current_stage, '→', messageData.next_stage);
+        setCurrentStage(messageData.next_stage);
+        setStatus(messageData.next_stage);
         break;
 
       case 'complete':
+        console.log('🎉 Processing complete!');
         setStatus('COMPLETE');
         setProgress(100);
-        setMessage(message.message);
-        // Fetch ideas
-        if (videoId) {
-          videoApi.getVideoIdeas(videoId).then((response) => {
+        setMessage(messageData.message);
+        setCurrentStage('COMPLETE');
+        if (currentVideoId) {
+          videoApi.getVideoIdeas(currentVideoId).then((response) => {
             setIdeas(response.ideas);
           }).catch((err) => {
             console.error('Failed to fetch ideas:', err);
           });
+          fetchVideoMetadata(currentVideoId);
         }
         break;
 
       case 'error':
+        console.error('❌ Processing error:', messageData.message);
         setStatus('FAILED');
-        setError(message.message || 'Processing failed');
-        setMessage(message.message);
+        setError(messageData.message || 'Processing failed');
+        setMessage(messageData.message);
         break;
     }
-  }, [videoId]);
+  }, [fetchVideoMetadata]); // Only depends on stable fetchVideoMetadata
 
   // Poll for status updates (fallback if WebSocket fails)
   const pollStatus = useCallback(async (vid: string) => {
@@ -80,10 +125,21 @@ export function useVideoProcessing(): UseVideoProcessingReturn {
       setCurrentStage(statusResponse.current_stage);
       setMessage(statusResponse.message);
 
-      // If complete, fetch ideas
+      // Fetch video metadata early when transcribing starts
+      if (statusResponse.current_stage === 'TRANSCRIBING') {
+        setVideoStreamUrl((currentUrl) => {
+          if (!currentUrl) {
+            fetchVideoMetadata(vid);
+          }
+          return currentUrl;
+        });
+      }
+
+      // If complete, fetch ideas and metadata
       if (statusResponse.status === 'COMPLETE') {
         const ideasResponse = await videoApi.getVideoIdeas(vid);
         setIdeas(ideasResponse.ideas);
+        fetchVideoMetadata(vid);
         
         // Stop polling
         if (pollingIntervalRef.current) {
@@ -102,22 +158,34 @@ export function useVideoProcessing(): UseVideoProcessingReturn {
     } catch (err) {
       console.error('Failed to poll status:', err);
     }
-  }, []);
+  }, [fetchVideoMetadata]);
 
   // Submit video for processing
   const submitVideo = useCallback(async (url: string, mode: string = 'groq') => {
     try {
+      // Reset previous state
       setError(null);
       setProgress(0);
+      setIdeas([]);
+      setVideoStreamUrl(null);
+      setVideoDuration(null);
+      setVideoTitle(null);
+      
+      setVideoUrl(url);
       setStatus('PENDING');
+      setCurrentStage('PENDING');
       setMessage('Submitting video...');
 
       const response = await videoApi.submitYouTubeUrl(url, mode);
+      
+      // CRITICAL: Set videoId in BOTH state and ref before connecting WebSocket
       setVideoId(response.video_id);
+      videoIdRef.current = response.video_id;
+      
       setStatus(response.status);
       setMessage(response.message);
 
-      // Connect WebSocket
+      // Connect WebSocket AFTER videoIdRef is set
       try {
         wsRef.current = videoApi.connectWebSocket(response.video_id, handleWebSocketMessage);
       } catch (wsError) {
@@ -127,7 +195,7 @@ export function useVideoProcessing(): UseVideoProcessingReturn {
       // Start polling as fallback
       pollingIntervalRef.current = setInterval(() => {
         pollStatus(response.video_id);
-      }, 2000); // Poll every 2 seconds
+      }, 2000);
 
     } catch (err: any) {
       setError(err.message || 'Failed to submit video');
@@ -138,6 +206,11 @@ export function useVideoProcessing(): UseVideoProcessingReturn {
   // Reset state
   const reset = useCallback(() => {
     setVideoId(null);
+    videoIdRef.current = null;
+    setVideoUrl(null);
+    setVideoStreamUrl(null);
+    setVideoDuration(null);
+    setVideoTitle(null);
     setStatus(null);
     setProgress(0);
     setCurrentStage(null);
@@ -172,6 +245,10 @@ export function useVideoProcessing(): UseVideoProcessingReturn {
 
   return {
     videoId,
+    videoUrl,
+    videoStreamUrl,
+    videoDuration,
+    videoTitle,
     status,
     progress,
     currentStage,

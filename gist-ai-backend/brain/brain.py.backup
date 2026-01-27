@@ -111,16 +111,8 @@ class Brain:
     def build_stage1_prompt(self, formatted_transcript):
         """
         STAGE 1: Identify what complete ideas exist
-        Routes to strict (Groq) or permissive (Ollama) variant
-        """
-        if self.is_permissive_mode():
-            return self.build_stage1_prompt_permissive(formatted_transcript)
-        else:
-            return self.build_stage1_prompt_strict(formatted_transcript)
-    
-    def build_stage1_prompt_strict(self, formatted_transcript):
-        """
-        STAGE 1 (STRICT): For Groq/OpenAI - High precision, selective
+        Does NOT find timestamps yet
+        UPDATED: Stricter criteria for self-contained moments
         """
         prompt = f"""You are a video editor reviewing a full transcript.
 
@@ -172,71 +164,10 @@ Output ONLY valid JSON, no extra text."""
 
         return prompt
     
-    def build_stage1_prompt_permissive(self, formatted_transcript):
-        """
-        STAGE 1 (PERMISSIVE): For Ollama - Exploratory, more accepting
-        """
-        prompt = f"""You are a video editor reviewing a full transcript.
-
-Your task: Find all potentially usable moments that could work as short-form videos (20-120 seconds).
-
-Be EXPLORATORY - find moments that could work with some editing or refinement.
-
-TRANSCRIPT:
-{formatted_transcript}
-
-RULES:
-1. Each idea should answer a question or tell a story
-2. Target duration: 20-120 seconds (flexible)
-3. Should have some narrative structure (beginning, middle, end)
-4. Ideas can be refined later - focus on finding workable moments
-5. An idea can span multiple segments if they connect
-
-GOOD IDEAS (workable moments):
-✓ "Why burnout happens even when you love your work"
-✓ "The origin of the word 'burnout'"
-✓ "What philosophers knew about rest"
-✓ "The cost of 'bullshit jobs'"
-✓ "How to recognize burnout symptoms"
-✓ "The difference between stress and burnout"
-
-ACCEPTABLE IDEAS (can be refined):
-✓ "Understanding burnout" (if there's a specific angle)
-✓ "Productivity tips" (if there are concrete examples)
-✓ "Work-life balance" (if there's a specific insight)
-
-Do NOT find timestamps yet. Just identify what moments exist.
-
-OUTPUT FORMAT (JSON):
-{{
-  "ideas": [
-    {{
-      "title": "Descriptive title for this moment",
-      "description": "What does this moment cover? What makes it interesting?"
-    }}
-  ]
-}}
-
-Be exploratory. Find all potentially usable moments.
-Aim for 5-15 ideas - we can refine later.
-
-Output ONLY valid JSON, no extra text."""
-
-        return prompt
-    
     def build_stage2_prompt(self, formatted_transcript, idea_title, idea_description):
         """
         STAGE 2: Find ALL segments that contribute to one specific idea
-        Routes to strict (Groq) or permissive (Ollama) variant
-        """
-        if self.is_permissive_mode():
-            return self.build_stage2_prompt_permissive(formatted_transcript, idea_title, idea_description)
-        else:
-            return self.build_stage2_prompt_strict(formatted_transcript, idea_title, idea_description)
-    
-    def build_stage2_prompt_strict(self, formatted_transcript, idea_title, idea_description):
-        """
-        STAGE 2 (STRICT): For Groq/OpenAI - Precise segmentation
+        UPDATED: Stricter minimum durations, merging guidance
         """
         prompt = f"""You are a video editor finding ALL moments that contribute to a specific idea.
 
@@ -257,12 +188,36 @@ CRITICAL SEGMENTATION RULES:
 5. Target: 1-4 segments total (not 5-10+)
 6. Total duration across all segments: 30-90 seconds
 
+WHEN TO CREATE A NEW SEGMENT:
+- Speaker discusses idea at 01:00, then completely different topic, then returns to idea at 05:00
+- There's a tangent you want to skip that's >10 seconds long
+- The idea has a clear setup → break → resolution pattern
+
+WHEN NOT TO CREATE A NEW SEGMENT:
+- Speaker pauses briefly (1-3 seconds)
+- Speaker says "um" or takes a breath
+- It's just the next sentence in the same explanation
+- Segments would be less than 5 seconds apart (merge them instead)
+
+EXAMPLE - GOOD (merged continuous speech):
+✓ Segments: [{{"start": "02:00", "end": "02:45"}}]  
+  Reason: 45 seconds of continuous explanation, no breaks
+
+EXAMPLE - BAD (micro-chopped):
+✗ Segments: [
+    {{"start": "02:00", "end": "02:08"}},
+    {{"start": "02:08", "end": "02:15"}},
+    {{"start": "02:15", "end": "02:25"}}
+  ]
+  Reason: These are adjacent and should be ONE segment [02:00-02:25]
+
 OUTPUT FORMAT (JSON):
 {{
   "segments": [
-    {{"start": "MM:SS", "end": "MM:SS", "purpose": "What this segment contributes (hook/development/resolution)"}}
+    {{"start": "MM:SS", "end": "MM:SS", "purpose": "What this segment contributes (hook/development/resolution)"}},
+    {{"start": "MM:SS", "end": "MM:SS", "purpose": "What this segment contributes"}}
   ],
-  "reasoning": "Explain how these segments connect to form the complete idea.",
+  "reasoning": "Explain how these segments connect to form the complete idea. If scattered, explain why these specific moments belong together.",
   "transcript_excerpt": "Key quotes that show the hook and resolution"
 }}
 
@@ -270,47 +225,6 @@ STRICT REQUIREMENTS:
 - Each segment MUST be at least 15 seconds
 - If the idea needs more than 4 segments or 90 seconds total, it's too broad
 - Merge adjacent or near-adjacent segments
-
-Output ONLY valid JSON, no extra text."""
-
-        return prompt
-    
-    def build_stage2_prompt_permissive(self, formatted_transcript, idea_title, idea_description):
-        """
-        STAGE 2 (PERMISSIVE): For Ollama - Flexible segmentation
-        """
-        prompt = f"""You are a video editor finding moments that contribute to a specific idea.
-
-IDEA TO FIND:
-Title: {idea_title}
-Description: {idea_description}
-
-TRANSCRIPT:
-{formatted_transcript}
-
-Your task: Find segments needed to tell this story. Be flexible - segments can be refined later.
-
-SEGMENTATION RULES:
-1. MINIMUM segment duration: 10 seconds (can be trimmed in editing)
-2. Create a new segment when there's a break in the narrative
-3. If someone is explaining one continuous point, keep it as ONE segment
-4. If segments are very close (within 3 seconds), consider merging
-5. Target: 1-6 segments total
-6. Total duration across all segments: 20-120 seconds
-
-OUTPUT FORMAT (JSON):
-{{
-  "segments": [
-    {{"start": "MM:SS", "end": "MM:SS", "purpose": "What this segment contributes"}}
-  ],
-  "reasoning": "Explain how these segments connect.",
-  "transcript_excerpt": "Key quotes from the segments"
-}}
-
-REQUIREMENTS:
-- Each segment should be at least 10 seconds
-- Total duration: 20-120 seconds is acceptable
-- Segments can be refined in post-production
 
 Output ONLY valid JSON, no extra text."""
 
@@ -447,13 +361,6 @@ Output ONLY valid JSON, no extra text."""
         UPDATED: Better error handling
         """
         print("\n=== STAGE 1: Identifying complete ideas ===")
-        
-        # Show which mode is active
-        if self.is_permissive_mode():
-            print("  🔓 PERMISSIVE MODE (Ollama): Exploratory filtering, 5-15 ideas expected")
-        else:
-            print("  🔒 STRICT MODE (Groq/OpenAI): Selective filtering, 3-8 ideas expected")
-        
         print("  → Analyzing video content...")
         
         try:
@@ -525,9 +432,8 @@ Output ONLY valid JSON, no extra text."""
             
             segment_duration = end_with_padding - start_with_padding
             
-            # Mode-aware validation
-            thresholds = self.get_validation_thresholds()
-            if segment_duration < thresholds['min_segment_duration']:
+            # STRICT: Reject micro-segments
+            if segment_duration < 15:
                 print(f"    ⚠ Segment too short ({segment_duration:.1f}s): {segment['start']}-{segment['end']} - REJECTED")
                 continue
             
@@ -586,22 +492,21 @@ Output ONLY valid JSON, no extra text."""
                     continue
                 
                 # VALIDATION: Reject ideas that are too long or have too many segments
-                thresholds = self.get_validation_thresholds()
-                if total_duration > thresholds['max_total_duration']:
+                if total_duration > 120:  # 2 minutes max
                     print(f"    ⚠ REJECTED: Too long ({total_duration}s) - likely a topic, not a moment")
                     continue
                 
-                if len(segments) > thresholds['max_segments']:
+                if len(segments) > 5:  # Max 5 segments (stricter than before)
                     print(f"    ⚠ REJECTED: Too many segments ({len(segments)}) - likely micro-chopped")
                     continue
                 
-                if total_duration < thresholds['min_total_duration']:
+                if total_duration < 25:  # Min 25 seconds (stricter)
                     print(f"    ⚠ REJECTED: Too short ({total_duration}s) - incomplete idea")
                     continue
                 
                 # STRICT: Check average segment duration
                 avg_segment_duration = total_duration / len(segments)
-                if avg_segment_duration < thresholds['min_avg_segment']:
+                if avg_segment_duration < 15:
                     print(f"    ⚠ REJECTED: Micro-chopped (avg {avg_segment_duration:.1f}s per segment, need 15s+)")
                     continue
                 

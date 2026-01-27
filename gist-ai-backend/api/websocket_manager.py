@@ -59,7 +59,7 @@ class WebSocketManager:
                     del self.active_connections[video_id]
     
     async def send_progress(self, video_id: str, stage: str, progress: int, message: str):
-        """Send a progress update"""
+        """Send progress update to all connections for a video"""
         await self.broadcast(video_id, {
             "type": "progress",
             "stage": stage,
@@ -67,29 +67,33 @@ class WebSocketManager:
             "message": message
         })
     
-    async def send_stage_complete(self, video_id: str, stage: str, next_stage: str):
-        """Send a stage completion message"""
+    async def send_message(self, video_id: str, message: dict):
+        """Send custom message to all connections for a video"""
+        await self.broadcast(video_id, message)
+    
+    async def send_stage_complete(self, video_id: str, current_stage: str, next_stage: str):
+        """Send stage completion notification"""
         await self.broadcast(video_id, {
             "type": "stage_complete",
-            "stage": stage,
+            "current_stage": current_stage,
             "next_stage": next_stage
         })
     
     async def send_complete(self, video_id: str, ideas_count: int):
-        """Send a processing complete message"""
+        """Send processing completion notification"""
         await self.broadcast(video_id, {
             "type": "complete",
-            "ideas_count": ideas_count,
-            "message": f"Processing complete! {ideas_count} ideas generated."
+            "message": f"Processing complete! {ideas_count} ideas generated.",
+            "ideas_count": ideas_count
         })
     
-    async def send_error(self, video_id: str, stage: str, error: str, message: str):
-        """Send an error message"""
+    async def send_error(self, video_id: str, stage: str, error: str, details: str):
+        """Send error notification"""
         await self.broadcast(video_id, {
             "type": "error",
             "stage": stage,
             "error": error,
-            "message": message
+            "message": details
         })
 
 

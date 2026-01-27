@@ -4,7 +4,6 @@ import { useState } from 'react';
 import { Upload, BookOpen, Sparkles, Zap, Type, Settings, Wand2, Download, Share2, Scissors } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { AIProcessingState } from './ai-processing-state';
 import { IdeaCard } from './idea-card';
 import { VideoUpload } from './video-upload';
 import { ProcessingProgress } from './processing-progress';
@@ -31,6 +30,10 @@ export function LeftSidebar({ selectedIdea, onSelectIdea }: LeftSidebarProps) {
   // Video processing hook
   const {
     videoId,
+    videoUrl,
+    videoStreamUrl,
+    videoDuration,
+    videoTitle,
     status,
     progress,
     currentStage,
@@ -40,6 +43,7 @@ export function LeftSidebar({ selectedIdea, onSelectIdea }: LeftSidebarProps) {
     isComplete,
     error,
     submitVideo,
+    reset,
   } = useVideoProcessing();
 
   // Handle YouTube URL submission
@@ -47,10 +51,11 @@ export function LeftSidebar({ selectedIdea, onSelectIdea }: LeftSidebarProps) {
     await submitVideo(url, 'groq');
   };
 
-  // Switch to ideas tab when processing completes
-  if (isComplete && activeTab === 'upload') {
-    setActiveTab('ideas');
-  }
+  // Handle reset/new upload
+  const handleReset = () => {
+    reset();
+    setActiveTab('upload');
+  };
 
   const tabs = [
     { id: 'upload', label: 'Upload', icon: Upload },
@@ -92,7 +97,12 @@ export function LeftSidebar({ selectedIdea, onSelectIdea }: LeftSidebarProps) {
         <div className="p-4">
           {activeTab === 'upload' && (
             <div className="space-y-4">
-              <VideoUpload onVideoSubmit={handleVideoSubmit} />
+              {/* Show upload form if no video or after reset */}
+              {!videoId && !isProcessing && (
+                <VideoUpload onVideoSubmit={handleVideoSubmit} />
+              )}
+
+              {/* Show processing progress */}
               {isProcessing && (
                 <ProcessingProgress
                   currentStage={currentStage}
@@ -100,6 +110,68 @@ export function LeftSidebar({ selectedIdea, onSelectIdea }: LeftSidebarProps) {
                   message={message}
                   error={error}
                 />
+              )}
+
+              {/* Show completion state with reset option */}
+              {isComplete && (
+                <div className="space-y-4">
+                  <div className="rounded-lg border border-border bg-secondary/30 p-5">
+                    <div className="flex items-start gap-3 mb-4">
+                      <div className="rounded-full bg-primary/20 p-2">
+                        <Sparkles className="h-5 w-5 text-primary" />
+                      </div>
+                      <div className="flex-1">
+                        <h3 className="text-sm font-semibold text-foreground">Processing Complete!</h3>
+                        <p className="text-xs text-muted-foreground mt-1">
+                          {ideas.length} ideas generated from your video
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex gap-2">
+                      <Button
+                        size="sm"
+                        variant="default"
+                        className="flex-1"
+                        onClick={() => setActiveTab('ideas')}
+                      >
+                        <Sparkles className="h-4 w-4 mr-2" />
+                        View Ideas
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={handleReset}
+                      >
+                        <Upload className="h-4 w-4 mr-2" />
+                        New Video
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Show error state with retry option */}
+              {error && status === 'FAILED' && (
+                <div className="rounded-lg border border-destructive/20 bg-destructive/10 p-5">
+                  <div className="flex items-start gap-3 mb-4">
+                    <div className="rounded-full bg-destructive/20 p-2">
+                      <Upload className="h-5 w-5 text-destructive" />
+                      </div>
+                    <div className="flex-1">
+                      <h3 className="text-sm font-semibold text-destructive">Processing Failed</h3>
+                      <p className="text-xs text-destructive/80 mt-1">{error}</p>
+                    </div>
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="w-full"
+                    onClick={handleReset}
+                  >
+                    <Upload className="h-4 w-4 mr-2" />
+                    Try Another Video
+                  </Button>
+                </div>
               )}
             </div>
           )}

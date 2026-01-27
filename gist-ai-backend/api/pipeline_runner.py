@@ -78,6 +78,10 @@ class PipelineRunner:
     
     async def run(self):
         """Run the pipeline with progress updates"""
+        # Wait 1 second to ensure WebSocket connection is established
+        # This prevents messages from being sent before frontend is ready
+        await asyncio.sleep(1)
+        
         try:
             # Stage 1: Ingestion
             await self.update_video_status(
@@ -87,7 +91,11 @@ class PipelineRunner:
             )
             
             pipeline = GistPipeline(mode=self.mode, skip_stitch=True)
-            transcript_path, yt_id = pipeline.run_ingestion(self.youtube_url)
+            # CRITICAL: Run in thread pool to prevent blocking the event loop
+            # This allows WebSocket messages to be sent during processing
+            transcript_path, yt_id = await asyncio.to_thread(
+                pipeline.run_ingestion, self.youtube_url
+            )
             
             if not transcript_path:
                 await self.update_video_status(
@@ -120,11 +128,20 @@ class PipelineRunner:
                     
                     db.commit()
             
-            # Stage 2: Transcription (already done in ingestion)
+            # Emit video_ready event with metadata so frontend can load video immediately
+            await ws_manager.send_message(self.video_id, {
+                "type": "video_ready",
+                "video_id": self.video_id,
+                "title": transcript_data.get('title', 'Unknown'),
+                "duration": transcript_data.get('duration', 0),
+                "message": "Video is ready for playback"
+            })
+            
+            # Stage 2: Transcription complete (already done in ingestion)
             await self.update_video_status(
                 ProcessingStage.TRANSCRIBING,
                 30,
-                "Transcribing audio to text..."
+                "Transcription complete"
             )
             await ws_manager.send_stage_complete(
                 self.video_id,
@@ -132,11 +149,11 @@ class PipelineRunner:
                 ProcessingStage.TRANSCRIBING.value
             )
             
-            # Stage 3: Understanding
+            # Stage 3: Understanding - Brain Stage 1 (Identifying Ideas)
             await self.update_video_status(
                 ProcessingStage.UNDERSTANDING,
-                50,
-                "Analyzing semantic content..."
+                45,
+                "Analyzing semantic content with AI..."
             )
             await ws_manager.send_stage_complete(
                 self.video_id,
@@ -144,32 +161,11 @@ class PipelineRunner:
                 ProcessingStage.UNDERSTANDING.value
             )
             
-            # Stage 4: Grouping
-            await self.update_video_status(
-                ProcessingStage.GROUPING,
-                70,
-                "Grouping related moments and ideas..."
+            # Run brain processing (includes understanding, grouping, ranking)
+            # CRITICAL: Run in thread pool to prevent blocking the event loop
+            ideas_path = await asyncio.to_thread(
+                pipeline.run_brain, transcript_path
             )
-            await ws_manager.send_stage_complete(
-                self.video_id,
-                ProcessingStage.UNDERSTANDING.value,
-                ProcessingStage.GROUPING.value
-            )
-            
-            # Stage 5: Ranking (Brain processing)
-            await self.update_video_status(
-                ProcessingStage.RANKING,
-                85,
-                "Ranking short-form potential..."
-            )
-            await ws_manager.send_stage_complete(
-                self.video_id,
-                ProcessingStage.GROUPING.value,
-                ProcessingStage.RANKING.value
-            )
-            
-            # Run brain processing
-            ideas_path = pipeline.run_brain(transcript_path)
             
             if not ideas_path:
                 await self.update_video_status(
@@ -185,6 +181,31 @@ class PipelineRunner:
                     "Could not find usable ideas in this video"
                 )
                 return
+            
+            # Brain processing complete - update remaining stages
+            # Stage 4: Grouping complete
+            await self.update_video_status(
+                ProcessingStage.GROUPING,
+                70,
+                "Grouping complete"
+            )
+            await ws_manager.send_stage_complete(
+                self.video_id,
+                ProcessingStage.UNDERSTANDING.value,
+                ProcessingStage.GROUPING.value
+            )
+            
+            # Stage 5: Ranking complete
+            await self.update_video_status(
+                ProcessingStage.RANKING,
+                90,
+                "Ranking complete"
+            )
+            await ws_manager.send_stage_complete(
+                self.video_id,
+                ProcessingStage.GROUPING.value,
+                ProcessingStage.RANKING.value
+            )
             
             # Update video with ideas path
             with get_db() as db:
@@ -226,7 +247,7 @@ class PipelineRunner:
             )
 
 
-async def run_pipeline_task(video_id: str, youtube_url: str, mode: str = "groq"):
+async def run_pipeline_task(video_id: str, youtube_url: str, mode: str = "local"):
     """Background task to run the pipeline"""
     runner = PipelineRunner(video_id, youtube_url, mode)
     await runner.run()
