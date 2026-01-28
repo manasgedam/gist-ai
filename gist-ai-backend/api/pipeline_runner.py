@@ -13,6 +13,8 @@ from run_pipeline import GistPipeline
 from api.models import ProcessingStage, Video, Idea, TimeRangeSchema
 from api.database import get_db
 from api.websocket_manager import ws_manager
+from api.supabase_client import VideoRepository, IdeaRepository, SegmentRepository
+from api.storage import r2_storage
 
 
 class PipelineRunner:
@@ -37,6 +39,18 @@ class PipelineRunner:
                     video.error_message = error
                     video.status = ProcessingStage.FAILED
                 db.commit()
+        
+        # Also update Supabase (dual-write)
+        try:
+            VideoRepository.update_processing_state(
+                self.video_id,
+                status=stage.value,
+                current_stage=stage.value,
+                progress=progress,
+                message=error if error else None
+            )
+        except Exception as e:
+            print(f"  ⚠ Warning: Supabase state update failed: {e}")
         
         # Broadcast via WebSocket
         await ws_manager.send_progress(self.video_id, stage.value, progress, message)
@@ -75,6 +89,50 @@ class PipelineRunner:
                 db.add(idea)
             
             db.commit()
+        
+        # Also save to Supabase (dual-write)
+        try:
+            print(f"💾 Saving ideas to Supabase...")
+            
+            # Clear existing ideas in Supabase
+            IdeaRepository.delete_ideas_for_video(self.video_id)
+            
+            # Save new ideas and segments
+            for idea_data in ideas_data.get('ideas', []):
+                # Create idea in Supabase
+                idea = IdeaRepository.create_idea(
+                    video_id=self.video_id,
+                    rank=idea_data.get('rank', 0) + 1,  # Convert 0-indexed to 1-indexed
+                    title=idea_data.get('title', ''),
+                    description=idea_data.get('reason', ''),
+                    reason=idea_data.get('reason', ''),
+                    strength=idea_data.get('strength', 'medium'),
+                    viral_potential=idea_data.get('viral_potential'),
+                    total_duration=idea_data.get('total_duration_seconds'),
+                    segment_count=idea_data.get('segment_count')
+                )
+                
+                idea_id = idea['id']
+                
+                # Create segments for this idea
+                segments = []
+                for idx, segment_data in enumerate(idea_data.get('segments', []), 1):
+                    segments.append({
+                        'idea_id': idea_id,
+                        'start_time': segment_data.get('start_seconds', 0),
+                        'end_time': segment_data.get('end_seconds', 0),
+                        'duration': segment_data.get('duration_seconds', 0),
+                        'sequence_order': idx,
+                        'purpose': segment_data.get('purpose', '')
+                    })
+                
+                if segments:
+                    SegmentRepository.bulk_create_segments(segments)
+            
+            print(f"  ✓ Saved {len(ideas_data.get('ideas', []))} ideas to Supabase")
+            
+        except Exception as e:
+            print(f"  ⚠ Warning: Supabase ideas save failed: {e}")
     
     async def run(self):
         """Run the pipeline with progress updates"""
@@ -112,7 +170,7 @@ class PipelineRunner:
                 )
                 return
             
-            # Update video metadata
+            # Update video metadata in SQLite
             with get_db() as db:
                 video = db.query(Video).filter(Video.id == self.video_id).first()
                 if video:
@@ -127,6 +185,73 @@ class PipelineRunner:
                         video.video_path = transcript_data.get('video_path', '')
                     
                     db.commit()
+            
+            # CLOUD STORAGE: Upload files to R2 and save to Supabase
+            try:
+                print(f"📤 Uploading files to R2...")
+                
+                # Get file paths from transcript data
+                with open(transcript_path, 'r') as f:
+                    transcript_data = json.load(f)
+                
+                video_path = Path(transcript_data.get('video_file_path', ''))
+                audio_path = transcript_path.parent / f"{yt_id}_audio.mp3"
+                
+                # Upload to R2
+                video_url = None
+                audio_url = None
+                transcript_url = None
+                
+                if video_path.exists():
+                    video_url = r2_storage.upload_video(self.video_id, str(video_path), 'original')
+                    print(f"  ✓ Video uploaded: {video_url}")
+                
+                if audio_path.exists():
+                    audio_url = r2_storage.upload_video(self.video_id, str(audio_path), 'audio')
+                    print(f"  ✓ Audio uploaded: {audio_url}")
+                
+                if transcript_path.exists():
+                    transcript_url = r2_storage.upload_video(self.video_id, str(transcript_path), 'transcript')
+                    print(f"  ✓ Transcript uploaded: {transcript_url}")
+                
+                # Save to Supabase
+                VideoRepository.set_video_urls(
+                    self.video_id,
+                    original_url=video_url,
+                    audio_url=audio_url,
+                    transcript_url=transcript_url
+                )
+                
+                VideoRepository.set_video_metadata(
+                    self.video_id,
+                    title=transcript_data.get('title', 'Unknown'),
+                    duration=transcript_data.get('duration', 0),
+                    language=transcript_data.get('language', 'en')
+                )
+                print(f"  ✓ Metadata saved to Supabase")
+                
+                # Clean up local files after successful upload
+                print(f"🗑️  Cleaning up local files...")
+                try:
+                    if video_path.exists():
+                        video_path.unlink()
+                        print(f"  ✓ Deleted local video: {video_path.name}")
+                    
+                    if audio_path.exists():
+                        audio_path.unlink()
+                        print(f"  ✓ Deleted local audio: {audio_path.name}")
+                    
+                    if transcript_path.exists():
+                        transcript_path.unlink()
+                        print(f"  ✓ Deleted local transcript: {transcript_path.name}")
+                    
+                    print(f"  ✓ Local files cleaned up")
+                except Exception as cleanup_error:
+                    print(f"  ⚠ Warning: File cleanup failed: {cleanup_error}")
+                
+            except Exception as e:
+                print(f"  ⚠ Warning: Cloud storage failed: {e}")
+                # Continue processing even if cloud storage fails
             
             # Emit video_ready event with metadata so frontend can load video immediately
             await ws_manager.send_message(self.video_id, {

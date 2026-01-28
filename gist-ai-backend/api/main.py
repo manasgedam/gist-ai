@@ -63,6 +63,19 @@ async def submit_youtube_video(
     db.commit()
     db.refresh(video)
     
+    # Also create in Supabase (dual-write)
+    try:
+        from api.supabase_client import VideoRepository
+        VideoRepository.create_video(
+            source_url=request.url,
+            source_type='youtube',
+            youtube_id=None,  # Will be set after ingestion
+            video_id=video.id  # Use same ID as SQLite
+        )
+        print(f"✓ Created video in Supabase: {video.id}")
+    except Exception as e:
+        print(f"⚠ Warning: Supabase video creation failed: {e}")
+    
     # Start background processing
     background_tasks.add_task(run_pipeline_task, video.id, request.url, request.mode)
     
