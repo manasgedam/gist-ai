@@ -1,5 +1,6 @@
 'use client';
 
+import { useState, useRef, useEffect } from 'react';
 import { TimeRange } from '@/lib/api/client';
 
 interface TimelineProps {
@@ -10,17 +11,46 @@ interface TimelineProps {
 }
 
 export function Timeline({ currentTime, duration, selectedIdeaRanges = [], onSeek }: TimelineProps) {
+  const [isDragging, setIsDragging] = useState(false);
+  const timelineRef = useRef<HTMLDivElement>(null);
+
   const getPositionPercent = (time: number) => (time / duration) * 100;
 
-  const handleTimelineClick = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (!onSeek || duration === 0) return;
+  const handleSeek = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!onSeek || duration === 0 || !timelineRef.current) return;
     
-    const rect = e.currentTarget.getBoundingClientRect();
+    const rect = timelineRef.current.getBoundingClientRect();
     const clickX = e.clientX - rect.left;
-    const percent = clickX / rect.width;
+    const percent = Math.max(0, Math.min(1, clickX / rect.width));
     const newTime = percent * duration;
     onSeek(newTime);
   };
+
+  const handleMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
+    setIsDragging(true);
+    handleSeek(e);
+  };
+
+  const handleMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!isDragging) return;
+    handleSeek(e);
+  };
+
+  const handleMouseUp = () => {
+    setIsDragging(false);
+  };
+
+  // Global mouse up listener to handle drag release outside timeline
+  useEffect(() => {
+    const handleGlobalMouseUp = () => {
+      setIsDragging(false);
+    };
+
+    if (isDragging) {
+      document.addEventListener('mouseup', handleGlobalMouseUp);
+      return () => document.removeEventListener('mouseup', handleGlobalMouseUp);
+    }
+  }, [isDragging]);
 
   return (
     <div className="flex h-36 flex-col gap-3 border-t border-border bg-background p-4">
@@ -28,8 +58,11 @@ export function Timeline({ currentTime, duration, selectedIdeaRanges = [], onSee
       <div className="flex items-center gap-2">
         <p className="text-xs font-medium text-muted-foreground w-12">Track</p>
         <div 
-          className="relative flex-1 h-5 bg-secondary rounded-sm cursor-pointer"
-          onClick={handleTimelineClick}
+          ref={timelineRef}
+          className={`relative flex-1 h-5 bg-secondary rounded-sm ${isDragging ? 'cursor-grabbing' : 'cursor-pointer'}`}
+          onMouseDown={handleMouseDown}
+          onMouseMove={handleMouseMove}
+          onMouseUp={handleMouseUp}
         >
           {[...Array(7)].map((_, i) => (
             <div
@@ -49,8 +82,10 @@ export function Timeline({ currentTime, duration, selectedIdeaRanges = [], onSee
       <div className="flex items-center gap-2">
         <p className="text-xs font-medium text-muted-foreground w-12">Video</p>
         <div 
-          className="relative flex-1 h-10 rounded-sm bg-secondary border border-border/50 overflow-hidden cursor-pointer"
-          onClick={handleTimelineClick}
+          className={`relative flex-1 h-10 rounded-sm bg-secondary border border-border/50 overflow-hidden ${isDragging ? 'cursor-grabbing' : 'cursor-pointer'}`}
+          onMouseDown={handleMouseDown}
+          onMouseMove={handleMouseMove}
+          onMouseUp={handleMouseUp}
         >
           {/* Full video background */}
           <div className="absolute inset-0 bg-primary/20" />
@@ -80,8 +115,10 @@ export function Timeline({ currentTime, duration, selectedIdeaRanges = [], onSee
       <div className="flex items-center gap-2">
         <p className="text-xs font-medium text-muted-foreground w-12">Audio</p>
         <div 
-          className="relative flex-1 h-8 rounded-sm bg-secondary border border-border/50 cursor-pointer"
-          onClick={handleTimelineClick}
+          className={`relative flex-1 h-8 rounded-sm bg-secondary border border-border/50 ${isDragging ? 'cursor-grabbing' : 'cursor-pointer'}`}
+          onMouseDown={handleMouseDown}
+          onMouseMove={handleMouseMove}
+          onMouseUp={handleMouseUp}
         >
           <div className="absolute inset-0 bg-accent/30" />
           <div

@@ -15,9 +15,14 @@ export function VideoEditor() {
   const [projectName, setProjectName] = useState('Untitled Project');
   const [autoSave, setAutoSave] = useState('All changes saved');
   const [aspectRatio, setAspectRatio] = useState<'16:9' | '9:16'>('16:9');
-  const [currentTime, setCurrentTime] = useState(0);
-  const [duration, setDuration] = useState(0);
   const [selectedIdea, setSelectedIdea] = useState<string | null>(null);
+
+  // Single source of truth for playback state
+  const [playbackState, setPlaybackState] = useState({
+    currentTime: 0,
+    isPlaying: false,
+    duration: 0
+  });
 
   // Get video processing state from hook (shared with LeftSidebar via re-render)
   const {
@@ -30,12 +35,22 @@ export function VideoEditor() {
 
   // Update duration when video metadata is available
   const handleDurationChange = useCallback((dur: number) => {
-    setDuration(dur);
+    setPlaybackState(prev => ({ ...prev, duration: dur }));
   }, []);
 
   // Handle timeline seek
   const handleSeek = useCallback((time: number) => {
-    setCurrentTime(time);
+    setPlaybackState(prev => ({ ...prev, currentTime: time }));
+  }, []);
+
+  // Handle time updates from video player
+  const handleTimeUpdate = useCallback((time: number) => {
+    setPlaybackState(prev => ({ ...prev, currentTime: time }));
+  }, []);
+
+  // Handle play/pause toggle
+  const handlePlayPause = useCallback(() => {
+    setPlaybackState(prev => ({ ...prev, isPlaying: !prev.isPlaying }));
   }, []);
 
   // Get time ranges for selected idea
@@ -68,9 +83,11 @@ export function VideoEditor() {
               <div className={`relative ${aspectRatio === '16:9' ? 'aspect-video' : 'aspect-[9/16] max-w-md mx-auto'}`}>
                 <VideoPlayer
                   videoUrl={videoStreamUrl}
-                  currentTime={currentTime}
-                  onTimeUpdate={setCurrentTime}
+                  currentTime={playbackState.currentTime}
+                  isPlaying={playbackState.isPlaying}
+                  onTimeUpdate={handleTimeUpdate}
                   onDurationChange={handleDurationChange}
+                  onPlayPause={handlePlayPause}
                   className="w-full h-full"
                 />
               </div>
@@ -100,8 +117,8 @@ export function VideoEditor() {
           {/* Timeline */}
           <div className="flex-shrink-0 border-t border-border bg-background">
             <Timeline
-              currentTime={currentTime}
-              duration={duration || videoDuration || 0}
+              currentTime={playbackState.currentTime}
+              duration={playbackState.duration || videoDuration || 0}
               selectedIdeaRanges={selectedIdeaRanges}
               onSeek={handleSeek}
             />

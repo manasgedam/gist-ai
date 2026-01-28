@@ -6,28 +6,49 @@ import { Button } from '@/components/ui/button';
 
 interface VideoPlayerProps {
   videoUrl: string | null;
-  currentTime?: number;
-  onTimeUpdate?: (time: number) => void;
-  onDurationChange?: (duration: number) => void;
+  currentTime: number;
+  isPlaying: boolean;
+  onTimeUpdate: (time: number) => void;
+  onDurationChange: (duration: number) => void;
+  onPlayPause: () => void;
   className?: string;
 }
 
 export function VideoPlayer({
   videoUrl,
-  currentTime = 0,
+  currentTime,
+  isPlaying,
   onTimeUpdate,
   onDurationChange,
+  onPlayPause,
   className = '',
 }: VideoPlayerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
-  const [isPlaying, setIsPlaying] = useState(false);
+  const seekingRef = useRef(false);
   const [volume, setVolume] = useState(80);
   const [isMuted, setIsMuted] = useState(false);
-  const [duration, setDuration] = useState(0);
 
-  // Sync external currentTime with video
+  // Controlled playback - sync isPlaying prop with video element
   useEffect(() => {
-    if (videoRef.current && Math.abs(videoRef.current.currentTime - currentTime) > 0.5) {
+    if (!videoRef.current) return;
+
+    if (isPlaying) {
+      videoRef.current.play().catch(err => {
+        console.error('Play failed:', err);
+      });
+    } else {
+      videoRef.current.pause();
+    }
+  }, [isPlaying]);
+
+  // Controlled seeking - sync currentTime prop with video element
+  useEffect(() => {
+    if (!videoRef.current) return;
+
+    const diff = Math.abs(videoRef.current.currentTime - currentTime);
+    // Reduced threshold from 0.5s to 0.1s for better precision
+    if (diff > 0.1) {
+      seekingRef.current = true;
       videoRef.current.currentTime = currentTime;
     }
   }, [currentTime]);
@@ -36,28 +57,17 @@ export function VideoPlayer({
   const handleLoadedMetadata = () => {
     if (videoRef.current) {
       const dur = videoRef.current.duration;
-      setDuration(dur);
-      onDurationChange?.(dur);
+      onDurationChange(dur);
     }
   };
 
-  // Handle time update
+  // Handle time update - prevent feedback loop
   const handleTimeUpdate = () => {
-    if (videoRef.current) {
-      onTimeUpdate?.(videoRef.current.currentTime);
+    if (!videoRef.current || seekingRef.current) {
+      seekingRef.current = false;
+      return;
     }
-  };
-
-  // Play/Pause toggle
-  const togglePlayPause = () => {
-    if (videoRef.current) {
-      if (isPlaying) {
-        videoRef.current.pause();
-      } else {
-        videoRef.current.play();
-      }
-      setIsPlaying(!isPlaying);
-    }
+    onTimeUpdate(videoRef.current.currentTime);
   };
 
   // Volume control
@@ -111,8 +121,6 @@ export function VideoPlayer({
         className="w-full h-full rounded-lg bg-black"
         onLoadedMetadata={handleLoadedMetadata}
         onTimeUpdate={handleTimeUpdate}
-        onPlay={() => setIsPlaying(true)}
-        onPause={() => setIsPlaying(false)}
       />
 
       {/* Video Controls Overlay */}
@@ -123,7 +131,7 @@ export function VideoPlayer({
             size="sm"
             variant="ghost"
             className="text-white hover:bg-white/20"
-            onClick={togglePlayPause}
+            onClick={onPlayPause}
           >
             {isPlaying ? (
               <Pause className="h-4 w-4" />

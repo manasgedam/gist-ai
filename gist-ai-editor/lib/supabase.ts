@@ -5,6 +5,22 @@ const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey)
 
+// Auth helpers
+export const getCurrentUser = async () => {
+  const { data: { user } } = await supabase.auth.getUser()
+  return user
+}
+
+export const getSession = async () => {
+  const { data: { session } } = await supabase.auth.getSession()
+  return session
+}
+
+export const getAuthToken = async () => {
+  const { data: { session } } = await supabase.auth.getSession()
+  return session?.access_token
+}
+
 // Database types (auto-generated from Supabase)
 export interface Video {
   id: string
@@ -21,6 +37,7 @@ export interface Video {
   current_stage?: string
   progress: number
   error_message?: string
+  user_id?: string
   created_at: string
   updated_at: string
   completed_at?: string
@@ -38,6 +55,7 @@ export interface Idea {
   total_duration?: number
   segment_count?: number
   clip_url?: string
+  user_id?: string
   created_at: string
 }
 

@@ -1,5 +1,7 @@
 // API client for Gist AI backend
 
+import { getAuthToken } from '@/lib/supabase';
+
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 const WS_BASE_URL = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000';
 

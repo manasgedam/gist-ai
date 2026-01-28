@@ -22,6 +22,17 @@ export interface UseVideoProcessingReturn {
   reset: () => void;
 }
 
+const STORAGE_KEY = 'gist-ai-video-processing';
+
+interface PersistedState {
+  videoId: string;
+  videoUrl: string;
+  status: string;
+  progress: number;
+  currentStage: string;
+  timestamp: number;
+}
+
 export function useVideoProcessing(): UseVideoProcessingReturn {
   const [videoId, setVideoId] = useState<string | null>(null);
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
@@ -48,6 +59,99 @@ export function useVideoProcessing(): UseVideoProcessingReturn {
 
   const isProcessing = status !== null && status !== 'COMPLETE' && status !== 'FAILED';
   const isComplete = status === 'COMPLETE';
+
+  // Save state to localStorage whenever it changes
+  useEffect(() => {
+    if (videoId && status && status !== 'COMPLETE' && status !== 'FAILED') {
+      const state: PersistedState = {
+        videoId,
+        videoUrl: videoUrl || '',
+        status,
+        progress,
+        currentStage: currentStage || '',
+        timestamp: Date.now(),
+      };
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    } else if (status === 'COMPLETE' || status === 'FAILED') {
+      // Clear storage when processing is done
+      localStorage.removeItem(STORAGE_KEY);
+    }
+  }, [videoId, videoUrl, status, progress, currentStage]);
+
+  // Restore state from localStorage on mount
+  useEffect(() => {
+    const restoreState = async () => {
+      const stored = localStorage.getItem(STORAGE_KEY);
+      if (!stored) return;
+
+      try {
+        const state: PersistedState = JSON.parse(stored);
+        
+        // Only restore if less than 24 hours old
+        const age = Date.now() - state.timestamp;
+        if (age > 24 * 60 * 60 * 1000) {
+          localStorage.removeItem(STORAGE_KEY);
+          return;
+        }
+
+        console.log('🔄 Restoring video processing state:', state.videoId);
+        
+        // Restore state
+        setVideoId(state.videoId);
+        videoIdRef.current = state.videoId;
+        setVideoUrl(state.videoUrl);
+        setStatus(state.status);
+        setProgress(state.progress);
+        setCurrentStage(state.currentStage);
+        setMessage('Reconnecting to video processing...');
+
+        // Fetch current status from server
+        try {
+          const statusResponse = await videoApi.getVideoStatus(state.videoId);
+          setStatus(statusResponse.status);
+          setProgress(statusResponse.progress);
+          setCurrentStage(statusResponse.current_stage);
+          setMessage(statusResponse.message);
+
+          // If complete, fetch ideas and metadata
+          if (statusResponse.status === 'COMPLETE') {
+            const ideasResponse = await videoApi.getVideoIdeas(state.videoId);
+            setIdeas(ideasResponse.ideas);
+            
+            const timeline = await videoApi.getVideoTimeline(state.videoId);
+            setVideoStreamUrl(timeline.video_url);
+            setVideoDuration(timeline.duration);
+            setVideoTitle(timeline.title);
+            
+            localStorage.removeItem(STORAGE_KEY);
+          } else if (statusResponse.status === 'FAILED') {
+            setError('Processing failed');
+            localStorage.removeItem(STORAGE_KEY);
+          } else {
+            // Still processing - reconnect WebSocket and start polling
+            try {
+              wsRef.current = videoApi.connectWebSocket(state.videoId, handleWebSocketMessage);
+            } catch (wsError) {
+              console.warn('WebSocket reconnection failed:', wsError);
+            }
+
+            // Start polling
+            pollingIntervalRef.current = setInterval(() => {
+              pollStatus(state.videoId);
+            }, 2000);
+          }
+        } catch (err) {
+          console.error('Failed to restore video state:', err);
+          localStorage.removeItem(STORAGE_KEY);
+        }
+      } catch (err) {
+        console.error('Failed to parse stored state:', err);
+        localStorage.removeItem(STORAGE_KEY);
+      }
+    };
+
+    restoreState();
+  }, []); // Only run on mount
 
   // Fetch video metadata when video ID is available
   const fetchVideoMetadata = useCallback(async (vid: string) => {
@@ -229,6 +333,9 @@ export function useVideoProcessing(): UseVideoProcessingReturn {
       clearInterval(pollingIntervalRef.current);
       pollingIntervalRef.current = null;
     }
+
+    // Clear localStorage
+    localStorage.removeItem(STORAGE_KEY);
   }, []);
 
   // Cleanup on unmount

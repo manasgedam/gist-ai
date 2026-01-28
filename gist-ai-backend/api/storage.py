@@ -3,6 +3,9 @@ Storage service for uploading files to Cloudflare R2
 """
 
 import boto3
+from botocore.config import Config
+from botocore.exceptions import ClientError
+from boto3.s3.transfer import TransferConfig
 import os
 from pathlib import Path
 from typing import Optional
@@ -17,13 +20,38 @@ class R2Storage:
         self.bucket = os.getenv('R2_BUCKET', 'gist-ai-storage')
         self.public_url = os.getenv('R2_PUBLIC_URL', 'https://gist-ai.r2.dev')
         
+        # Configure boto3 for R2 with proper timeouts and retries
+        config = Config(
+            region_name='auto',
+            signature_version='s3v4',
+            retries={
+                'max_attempts': 3,
+                'mode': 'adaptive'
+            },
+            # Increase timeouts for large file uploads
+            connect_timeout=10,
+            read_timeout=300,  # 5 minutes for large files
+            # S3-specific configuration
+            s3={
+                'addressing_style': 'path'
+            }
+        )
+        
         # Initialize S3 client (R2 is S3-compatible)
         self.client = boto3.client(
             's3',
             endpoint_url=self.endpoint,
             aws_access_key_id=self.access_key,
             aws_secret_access_key=self.secret_key,
-            region_name='auto'  # R2 uses 'auto' region
+            config=config
+        )
+        
+        # Transfer configuration for multipart uploads
+        self.transfer_config = TransferConfig(
+            multipart_threshold=8 * 1024 * 1024,  # 8MB
+            max_concurrency=10,
+            multipart_chunksize=8 * 1024 * 1024,  # 8MB chunks
+            use_threads=True
         )
     
     def upload_file(self, local_path: str, r2_key: str, content_type: Optional[str] = None) -> str:
@@ -49,14 +77,35 @@ class R2Storage:
             }
             content_type = content_types.get(ext, 'application/octet-stream')
         
-        # Upload to R2
-        extra_args = {'ContentType': content_type}
-        self.client.upload_file(
-            local_path,
-            self.bucket,
-            r2_key,
-            ExtraArgs=extra_args
-        )
+        # Get file size
+        file_size = os.path.getsize(local_path)
+        print(f"  → Uploading {Path(local_path).name} ({file_size / 1024 / 1024:.1f} MB)")
+        
+        try:
+            # Upload to R2 with retry logic
+            extra_args = {
+                'ContentType': content_type,
+                'ACL': 'public-read'  # Make file publicly accessible
+            }
+            
+            self.client.upload_file(
+                local_path,
+                self.bucket,
+                r2_key,
+                ExtraArgs=extra_args,
+                Config=self.transfer_config
+            )
+            
+            print(f"  ✓ Upload complete")
+            
+        except ClientError as e:
+            error_code = e.response['Error']['Code']
+            error_msg = e.response['Error'].get('Message', str(e))
+            print(f"  ✗ Upload failed: {error_code} - {error_msg}")
+            raise Exception(f"R2 upload failed: {error_code} - {error_msg}")
+        except Exception as e:
+            print(f"  ✗ Upload failed: {str(e)}")
+            raise Exception(f"R2 upload failed: {str(e)}")
         
         # Return public URL
         return f"{self.public_url}/{r2_key}"

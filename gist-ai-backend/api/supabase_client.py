@@ -3,14 +3,26 @@ Supabase database client
 """
 
 import os
+from dotenv import load_dotenv
 from supabase import create_client, Client
+
+# Load environment variables from .env file
+load_dotenv()
 
 # Initialize Supabase client
 SUPABASE_URL = os.getenv('SUPABASE_URL')
-SUPABASE_KEY = os.getenv('SUPABASE_KEY')
+SUPABASE_ANON_KEY = os.getenv('SUPABASE_ANON_KEY')  # For frontend
+SUPABASE_SERVICE_KEY = os.getenv('SUPABASE_SERVICE_ROLE_KEY')  # For backend
 
-if not SUPABASE_URL or not SUPABASE_KEY:
-    raise ValueError("SUPABASE_URL and SUPABASE_KEY must be set in environment variables")
+if not SUPABASE_URL:
+    raise ValueError("SUPABASE_URL must be set in environment variables")
+
+# Use service role key for backend operations (bypasses RLS)
+# Falls back to anon key if service key not available (development)
+SUPABASE_KEY = SUPABASE_SERVICE_KEY or SUPABASE_ANON_KEY
+
+if not SUPABASE_KEY:
+    raise ValueError("Either SUPABASE_SERVICE_ROLE_KEY or SUPABASE_ANON_KEY must be set")
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
@@ -96,7 +108,7 @@ class IdeaRepository:
     """Repository for idea database operations"""
     
     @staticmethod
-    def create_idea(video_id: str, rank: int, title: str, description: str, **kwargs):
+    def create_idea(video_id: str, rank: int, title: str, description: str, user_id: str = None, **kwargs):
         """Create a new idea"""
         data = {
             'video_id': video_id,
@@ -105,6 +117,11 @@ class IdeaRepository:
             'description': description,
             **kwargs
         }
+        
+        # CRITICAL: Include user_id to satisfy RLS policy
+        if user_id:
+            data['user_id'] = user_id
+        
         result = supabase.table('ideas').insert(data).execute()
         return result.data[0] if result.data else None
     
