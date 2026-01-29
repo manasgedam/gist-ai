@@ -1,143 +1,136 @@
-from enum import Enum
-from datetime import datetime
-from typing import Optional, List
-from sqlalchemy import Column, String, Integer, Float, DateTime, ForeignKey, JSON, Enum as SQLEnum
+"""
+Database models and Pydantic schemas
+"""
+
+from sqlalchemy import Column, Integer, String, Float, ForeignKey, JSON, Text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
 from pydantic import BaseModel
+from typing import Optional, List, Dict, Any
 import uuid
+import datetime
 
 Base = declarative_base()
 
+class ProcessingStage:
+    PENDING = "pending"
+    INGESTING = "ingesting"
+    TRANSCRIBING = "transcribing"
+    UNDERSTANDING = "understanding"
+    GROUPING = "grouping"
+    RANKING = "ranking"
+    COMPLETE = "complete"
+    FAILED = "failed"
 
-class ProcessingStage(str, Enum):
-    """Processing pipeline stages"""
-    PENDING = "PENDING"
-    INGESTING = "INGESTING"
-    TRANSCRIBING = "TRANSCRIBING"
-    UNDERSTANDING = "UNDERSTANDING"
-    GROUPING = "GROUPING"
-    RANKING = "RANKING"
-    COMPLETE = "COMPLETE"
-    FAILED = "FAILED"
 
+# ============================================================================
+# SQLAlchemy Models
+# ============================================================================
 
 class Video(Base):
-    """Video database model"""
     __tablename__ = "videos"
-    
+
     id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     youtube_url = Column(String, nullable=False)
     youtube_id = Column(String, nullable=True)
     title = Column(String, nullable=True)
-    duration = Column(Float, nullable=True)
-    status = Column(SQLEnum(ProcessingStage), default=ProcessingStage.PENDING)
-    current_stage = Column(SQLEnum(ProcessingStage), default=ProcessingStage.PENDING)
-    progress = Column(Integer, default=0)
+    description = Column(Text, nullable=True)
+    duration = Column(Integer, nullable=True)  # in seconds
+    thumbnail = Column(String, nullable=True)
     video_path = Column(String, nullable=True)
+    audio_path = Column(String, nullable=True)
     transcript_path = Column(String, nullable=True)
-    ideas_path = Column(String, nullable=True)
-    error_message = Column(String, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
-    # Relationship
+    status = Column(String, default=ProcessingStage.PENDING)
+    current_stage = Column(String, default=ProcessingStage.PENDING)
+    progress = Column(Integer, default=0)
+    error_message = Column(Text, nullable=True)
+    
+    created_at = Column(String, default=lambda: datetime.datetime.now().isoformat())
+    updated_at = Column(String, default=lambda: datetime.datetime.now().isoformat())
+
+    # Relationships
     ideas = relationship("Idea", back_populates="video", cascade="all, delete-orphan")
 
 
 class Idea(Base):
-    """Idea database model"""
     __tablename__ = "ideas"
-    
+
     id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     video_id = Column(String, ForeignKey("videos.id"), nullable=False)
     rank = Column(Integer, nullable=False)
     title = Column(String, nullable=False)
-    reason = Column(String, nullable=False)
-    strength = Column(String, nullable=False)  # "high" | "medium" | "low"
-    viral_potential = Column(String, nullable=True)
-    highlights = Column(JSON, nullable=True)  # Array of strings
-    time_ranges = Column(JSON, nullable=False)  # Array of TimeRange objects
+    description = Column(Text, nullable=True)
+    reason = Column(Text, nullable=True)
+    strength = Column(String, nullable=True)
+    viral_potential = Column(Float, nullable=True)
     
-    # Relationship
+    # JSON fields for structured data
+    highlights = Column(JSON, nullable=True)
+    time_ranges = Column(JSON, nullable=True)  # List of {start, end}
+    
+    created_at = Column(String, default=lambda: datetime.datetime.now().isoformat())
+
+    # Relationships
     video = relationship("Video", back_populates="ideas")
 
 
-# Pydantic Schemas for API
-
-class TimeRangeSchema(BaseModel):
-    """Time range schema"""
-    start: float
-    end: float
-    confidence: float = 1.0
-
+# ============================================================================
+# Pydantic Models
+# ============================================================================
 
 class VideoSubmitRequest(BaseModel):
-    """Request schema for submitting a YouTube URL"""
     url: str
-    mode: str = "groq"
+    project_id: Optional[str] = None
+    mode: Optional[str] = "auto"
 
 
 class VideoResponse(BaseModel):
-    """Response schema for video submission"""
     video_id: str
-    status: ProcessingStage
+    status: str
     message: str
 
 
 class VideoStatusResponse(BaseModel):
-    """Response schema for video status"""
     video_id: str
-    status: ProcessingStage
+    status: str
     progress: int
-    current_stage: ProcessingStage
+    current_stage: Optional[str]
     message: str
-    estimated_completion: Optional[str] = None
+
+
+class TimeRangeSchema(BaseModel):
+    start: float
+    end: float
 
 
 class IdeaResponse(BaseModel):
-    """Response schema for an idea"""
     id: str
     rank: int
     title: str
-    reason: str
-    strength: str
-    viral_potential: Optional[str]
-    highlights: List[str]
+    description: Optional[str]
+    strength: Optional[str]
+    viral_potential: Optional[float]
+    highlights: Optional[List[str]] = []
     time_ranges: List[TimeRangeSchema]
 
 
 class IdeasResponse(BaseModel):
-    """Response schema for all ideas"""
     video_id: str
     ideas: List[IdeaResponse]
 
 
 class TimelineSegment(BaseModel):
-    """Timeline segment schema"""
     start: float
     end: float
     label: str
-    ideas: List[str]  # List of idea IDs
+    ideas: List[str]  # Idea IDs
 
 
 class TimelineResponse(BaseModel):
-    """Response schema for timeline"""
     video_id: str
     video_url: str
     duration: float
     title: str
     thumbnail: Optional[str]
     segments: List[TimelineSegment]
-
-
-class WebSocketMessage(BaseModel):
-    """WebSocket message schema"""
-    type: str  # "progress" | "stage_complete" | "complete" | "error"
-    stage: Optional[ProcessingStage] = None
-    progress: Optional[int] = None
-    message: Optional[str] = None
-    next_stage: Optional[ProcessingStage] = None
-    ideas_count: Optional[int] = None
-    error: Optional[str] = None
-    timestamp: str = datetime.utcnow().isoformat()

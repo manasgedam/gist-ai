@@ -80,7 +80,7 @@ class PipelineRunner:
                     video_id=self.video_id,
                     rank=idea_data.get('rank', 0),
                     title=idea_data.get('title', ''),
-                    reason=idea_data.get('reason', ''),
+                    description=idea_data.get('reason', ''),
                     strength=idea_data.get('strength', 'medium'),
                     viral_potential=idea_data.get('viral_potential'),
                     highlights=idea_data.get('highlights', []),
@@ -105,7 +105,6 @@ class PipelineRunner:
                     rank=idea_data.get('rank', 0) + 1,  # Convert 0-indexed to 1-indexed
                     title=idea_data.get('title', ''),
                     description=idea_data.get('reason', ''),
-                    reason=idea_data.get('reason', ''),
                     strength=idea_data.get('strength', 'medium'),
                     viral_potential=idea_data.get('viral_potential'),
                     total_duration=idea_data.get('total_duration_seconds'),
@@ -376,3 +375,37 @@ async def run_pipeline_task(video_id: str, youtube_url: str, mode: str = "local"
     """Background task to run the pipeline"""
     runner = PipelineRunner(video_id, youtube_url, mode)
     await runner.run()
+
+    def _run_mock_pipeline(self):
+        """Mock pipeline for development without API calls"""
+        import time
+        from api.mock_data import get_mock_ideas
+        
+        try:
+            # Simulate some processing time
+            self._update_state('INGESTING', 20, 'Downloading video...')
+            time.sleep(0.5)
+            
+            self._update_state('TRANSCRIBING', 40, 'Extracting audio...')
+            time.sleep(0.5)
+            
+            self._update_state('UNDERSTANDING', 60, 'Analyzing content...')
+            time.sleep(0.5)
+            
+            self._update_state('GROUPING', 80, 'Finding ideas...')
+            time.sleep(0.5)
+            
+            # Get mock ideas
+            mock_data = get_mock_ideas()
+            
+            # Save to database (same as real pipeline)
+            self._save_ideas_to_db(mock_data)
+            
+            self._update_state('COMPLETE', 100, 'Processing complete!')
+            print('✅ Mock pipeline complete - ideas saved to database')
+            
+        except Exception as e:
+            print(f'Mock pipeline error: {e}')
+            self._update_state('FAILED', 0, f'Mock processing failed: {str(e)}')
+            raise
+

@@ -73,6 +73,12 @@ async def submit_youtube_video(
             video_id=video.id  # Use same ID as SQLite
         )
         print(f"✓ Created video in Supabase: {video.id}")
+        
+        # Update project status if linked
+        if request.project_id:
+            from api.project_repository import ProjectRepository
+            ProjectRepository.update_project(request.project_id, status='processing')
+            print(f"✓ Updated project {request.project_id} to processing")
     except Exception as e:
         print(f"⚠ Warning: Supabase video creation failed: {e}")
     
@@ -123,8 +129,8 @@ async def get_video_ideas(video_id: str, db: Session = Depends(get_db_session)):
     if not video:
         raise HTTPException(status_code=404, detail="Video not found")
     
-    if video.status != ProcessingStage.COMPLETE:
-        raise HTTPException(status_code=400, detail="Video processing not complete")
+    # Allow timeline access even during processing
+    # Video player can show while ideas are being generated
     
     # Get ideas
     ideas = db.query(Idea).filter(Idea.video_id == video_id).order_by(Idea.rank).all()
@@ -136,7 +142,7 @@ async def get_video_ideas(video_id: str, db: Session = Depends(get_db_session)):
             id=idea.id,
             rank=idea.rank,
             title=idea.title,
-            reason=idea.reason,
+            description=idea.description,
             strength=idea.strength,
             viral_potential=idea.viral_potential,
             highlights=idea.highlights or [],
@@ -157,8 +163,8 @@ async def get_video_timeline(video_id: str, db: Session = Depends(get_db_session
     if not video:
         raise HTTPException(status_code=404, detail="Video not found")
     
-    if video.status != ProcessingStage.COMPLETE:
-        raise HTTPException(status_code=400, detail="Video processing not complete")
+    # Allow timeline access even during processing
+    # Video player can show while ideas are being generated
     
     # Get ideas for segments
     ideas = db.query(Idea).filter(Idea.video_id == video_id).order_by(Idea.rank).all()
@@ -223,3 +229,121 @@ async def websocket_endpoint(websocket: WebSocket, video_id: str):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
+
+# ============================================================================
+# PROJECT ENDPOINTS
+# ============================================================================
+
+from fastapi import Header
+from .project_models import ProjectCreate, ProjectResponse, ProjectListResponse
+from .project_repository import ProjectRepository
+
+
+async def get_current_user_id(authorization: str = Header(None)) -> str:
+    """Extract user ID from authorization header"""
+    if not authorization or not authorization.startswith('Bearer '):
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    
+    from api.supabase_client import supabase
+    token = authorization.replace('Bearer ', '')
+    
+    try:
+        user = supabase.auth.get_user(token)
+        return user.user.id
+    except Exception as e:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+
+@app.get("/api/projects", response_model=ProjectListResponse)
+async def list_projects(user_id: str = Depends(get_current_user_id)):
+    """Get all projects for the authenticated user"""
+    try:
+        projects = ProjectRepository.get_user_projects(user_id)
+        return ProjectListResponse(projects=projects)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/projects", response_model=ProjectResponse)
+async def create_project(
+    request: ProjectCreate,
+    user_id: str = Depends(get_current_user_id)
+):
+    """Create a new project"""
+    try:
+        project = ProjectRepository.create_project(
+            user_id=user_id,
+            title=request.title
+        )
+        return project
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/projects/{project_id}", response_model=ProjectResponse)
+async def get_project(
+    project_id: str,
+    user_id: str = Depends(get_current_user_id)
+):
+    """Get a specific project"""
+    try:
+        project = ProjectRepository.get_project(project_id)
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+        
+        if project['user_id'] != user_id:
+            raise HTTPException(status_code=403, detail="Not authorized")
+        
+        return project
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/projects/{project_id}")
+async def delete_project(
+    project_id: str,
+    user_id: str = Depends(get_current_user_id)
+):
+    """Delete a project"""
+    try:
+        project = ProjectRepository.get_project(project_id)
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+        
+        if project['user_id'] != user_id:
+            raise HTTPException(status_code=403, detail="Not authorized")
+        
+        ProjectRepository.delete_project(project_id)
+        return {"message": "Project deleted successfully"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/projects/{project_id}/details")
+async def get_project_details(
+    project_id: str,
+    user_id: str = Depends(get_current_user_id)
+):
+    """Get complete project with video, ideas, and segments"""
+    from api.project_repository import ProjectRepository
+    
+    try:
+        details = ProjectRepository.get_project_details(project_id)
+        
+        if not details:
+            raise HTTPException(status_code=404, detail="Project not found")
+        
+        # Verify ownership
+        if details['project']['user_id'] != user_id:
+            raise HTTPException(status_code=403, detail="Not authorized")
+        
+        return details
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
