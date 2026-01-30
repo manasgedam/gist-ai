@@ -3,13 +3,10 @@ Brain - Editorial intelligence layer (TWO-STAGE PROCESS)
 Stage 1: Identify complete ideas
 Stage 2: Find all segments for each idea
 
-Supports: local LLM, OpenAI API, Groq API
+Uses provider-based LLM architecture (OpenRouter primary, Groq fallback)
 """
 
 import json
-import ollama
-from openai import OpenAI
-from groq import Groq
 from pathlib import Path
 import os
 from dotenv import load_dotenv
@@ -19,38 +16,66 @@ load_dotenv()
 
 
 class Brain:
-    def __init__(self, mode="local", model=None):
+    """
+    Brain - Editorial intelligence layer for video content analysis.
+    
+    Two-stage process:
+    - Stage 1: Identify complete ideas from transcript
+    - Stage 2: Find all segments for each idea
+    
+    Public API:
+        __init__(provider=None) - Initialize with LLM provider
+        process(transcript_path) - Run full two-stage pipeline
+        save_output(ideas_data, output_dir="output") - Save results to JSON
+        
+    Internal methods (used by process):
+        stage1_identify_ideas(formatted_transcript) - Stage 1 processing
+        stage2_find_segments(formatted_transcript, idea, transcript_data) - Stage 2 processing
+        query_llm(prompt, temperature=0.3) - Send prompt to LLM provider
+        generate(prompt, temperature=0.3) - Alias for query_llm
+    """
+    
+    def __init__(self, provider=None):
         """
-        mode: "local", "openai", or "groq"
-        model: 
-            - For local: "llama3" (default)
-            - For openai: "gpt-4o-mini" (default) or "gpt-4o"
-            - For groq: "llama-3.3-70b-versatile" (default, free)
+        Initialize Brain with an LLM provider.
+        
+        Args:
+            provider: LLMProvider instance (from providers.py)
+                     If None, will auto-select from available providers
         """
-        self.mode = mode
+        if provider is None:
+            # Auto-select provider if not provided
+            from .providers import ProviderFactory
+            providers = ProviderFactory.create_provider_chain()
+            provider = ProviderFactory.select_provider_with_preflight(providers)
         
-        if mode == "local":
-            self.model = model or "llama3"
-            print(f"Brain initialized [LOCAL MODE] with model: {self.model}")
+        self.provider = provider
+        print(f"Brain initialized with provider: {self.provider.name()} ({self.provider.get_model_name()})")
         
-        elif mode == "openai":
-            self.model = model or "gpt-4o-mini"
-            api_key = os.getenv("OPENAI_API_KEY")
-            if not api_key:
-                raise ValueError("OPENAI_API_KEY not found in environment. Add to .env file.")
-            self.client = OpenAI(api_key=api_key)
-            print(f"Brain initialized [OPENAI MODE] with model: {self.model}")
+        # Brain runtime invariants (fixed configuration):
+        # - Strict mode only (no permissive/local mode)
+        # - Fixed segment duration bounds for quality control
+        # - Consistent validation thresholds
         
-        elif mode == "groq":
-            self.model = model or "llama-3.3-70b-versatile"
-            api_key = os.getenv("GROQ_API_KEY")
-            if not api_key:
-                raise ValueError("GROQ_API_KEY not found in environment. Add to .env file.")
-            self.client = Groq(api_key=api_key)
-            print(f"Brain initialized [GROQ MODE] with model: {self.model}")
+        # Segment duration constraints (seconds)
+        self.min_segment_duration = 15  # Minimum viable segment length
+        self.max_segment_duration = 120  # Maximum to keep clips focused
+        self.min_total_duration = 25  # Minimum total duration for an idea
+        self.max_total_duration = 120  # Maximum total duration for an idea
         
-        else:
-            raise ValueError(f"Invalid mode: {mode}. Use 'local', 'openai', or 'groq'")
+        # Idea validation thresholds
+        self.min_ideas = 3  # Minimum ideas to extract
+        self.max_ideas = 10  # Maximum ideas to prevent overload
+        self.min_segments_per_idea = 1  # Minimum segments per idea
+        self.max_segments = 5  # Maximum segments per idea
+        self.min_avg_segment = 15  # Minimum average segment duration
+        
+        # Sanity check: Ensure all required attributes are set
+        assert hasattr(self, 'provider'), "Brain must have provider"
+        assert hasattr(self, 'min_segment_duration'), "Brain must have min_segment_duration"
+        assert hasattr(self, 'max_segment_duration'), "Brain must have max_segment_duration"
+
+
     
     def load_transcript(self, transcript_path):
         """Load transcript JSON from ingestion output"""
@@ -83,44 +108,30 @@ class Brain:
         secs = int(seconds % 60)
         return f"{mins:02d}:{secs:02d}"
     
-    def is_permissive_mode(self):
-        """Check if using local Ollama (permissive) vs cloud API (strict)"""
-        return self.mode == "local"
-    
     def get_validation_thresholds(self):
-        """Get validation thresholds based on mode"""
-        if self.is_permissive_mode():
-            # Ollama: Permissive thresholds to ensure ideas are returned
-            return {
-                'min_segment_duration': 10,
-                'min_total_duration': 15,
-                'max_total_duration': 150,
-                'max_segments': 7,
-                'min_avg_segment': 10
-            }
-        else:
-            # Groq/OpenAI: Strict thresholds for high quality
-            return {
-                'min_segment_duration': 15,
-                'min_total_duration': 25,
-                'max_total_duration': 120,
-                'max_segments': 5,
-                'min_avg_segment': 15
-            }
+        """Get validation thresholds (uses instance attributes set in __init__)"""
+        return {
+            'min_ideas': self.min_ideas,
+            'max_ideas': self.max_ideas,
+            'min_segments_per_idea': self.min_segments_per_idea,
+            'min_segment_duration': self.min_segment_duration,
+            'max_segment_duration': self.max_segment_duration,
+            'min_total_duration': self.min_total_duration,
+            'max_total_duration': self.max_total_duration,
+            'max_segments': self.max_segments,
+            'min_avg_segment': self.min_avg_segment
+        }
     
     def build_stage1_prompt(self, formatted_transcript):
         """
         STAGE 1: Identify what complete ideas exist
         Routes to strict (Groq) or permissive (Ollama) variant
         """
-        if self.is_permissive_mode():
-            return self.build_stage1_prompt_permissive(formatted_transcript)
-        else:
-            return self.build_stage1_prompt_strict(formatted_transcript)
+        return self.build_stage1_prompt_strict(formatted_transcript)
     
     def build_stage1_prompt_strict(self, formatted_transcript):
         """
-        STAGE 1 (STRICT): For Groq/OpenAI - High precision, selective
+        STAGE 1 (STRICT): For Groq/OpenRouter - High precision, selective
         """
         prompt = f"""You are a video editor reviewing a full transcript.
 
@@ -227,16 +238,13 @@ Output ONLY valid JSON, no extra text."""
     def build_stage2_prompt(self, formatted_transcript, idea_title, idea_description):
         """
         STAGE 2: Find ALL segments that contribute to one specific idea
-        Routes to strict (Groq) or permissive (Ollama) variant
+        Always uses strict validation for quality
         """
-        if self.is_permissive_mode():
-            return self.build_stage2_prompt_permissive(formatted_transcript, idea_title, idea_description)
-        else:
-            return self.build_stage2_prompt_strict(formatted_transcript, idea_title, idea_description)
+        return self.build_stage2_prompt_strict(formatted_transcript, idea_title, idea_description)
     
     def build_stage2_prompt_strict(self, formatted_transcript, idea_title, idea_description):
         """
-        STAGE 2 (STRICT): For Groq/OpenAI - Precise segmentation
+        STAGE 2 (STRICT): For Groq/OpenRouter - Precise segmentation
         """
         prompt = f"""You are a video editor finding ALL moments that contribute to a specific idea.
 
@@ -271,7 +279,15 @@ STRICT REQUIREMENTS:
 - If the idea needs more than 4 segments or 90 seconds total, it's too broad
 - Merge adjacent or near-adjacent segments
 
-Output ONLY valid JSON, no extra text."""
+CRITICAL JSON RULES:
+- Output ONLY valid JSON (no markdown, no explanation)
+- Do NOT escape apostrophes: use ' not \'
+- Use only standard JSON escapes: \" \\ \/ \b \f \n \r \t
+- No trailing commas
+- Invalid JSON will be DISCARDED without retry (wastes credits)
+
+IMPORTANT: Output ONLY valid JSON. No explanatory text before or after. Ensure all strings are properly quoted and escaped."""
+
 
         return prompt
     
@@ -312,126 +328,118 @@ REQUIREMENTS:
 - Total duration: 20-120 seconds is acceptable
 - Segments can be refined in post-production
 
-Output ONLY valid JSON, no extra text."""
+IMPORTANT: Output ONLY valid JSON. No explanatory text before or after. Ensure all strings are properly quoted and escaped."""
+
 
         return prompt
     
-    def query_llm(self, prompt):
-        """Send prompt to LLM (local, OpenAI, or Groq)"""
-        if self.mode == "local":
-            return self._query_local_llm(prompt)
-        elif self.mode == "openai":
-            return self._query_openai_llm(prompt)
-        else:  # groq
-            return self._query_groq_llm(prompt)
-    
-    def _query_local_llm(self, prompt):
-        """Query local Ollama model"""
-        print("Querying local LLM...")
+    def generate(self, prompt, temperature=0.3):
+        """
+        Generate LLM response using configured provider.
         
-        response = ollama.chat(
-            model=self.model,
-            messages=[{
-                'role': 'user',
-                'content': prompt
-            }]
-        )
+        Args:
+            prompt: Text prompt to send to LLM
+            temperature: Sampling temperature (0.0-1.0)
         
-        return response['message']['content']
-    
-    def _query_openai_llm(self, prompt):
-        """Query OpenAI API with automatic fallback to local Ollama"""
-        print(f"Querying OpenAI API ({self.model})...")
-        
+        Returns:
+            str: LLM response text
+        """
         try:
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": prompt
-                    }
-                ],
-                temperature=0.3
-            )
-            
-            return response.choices[0].message.content
-            
+            return self.provider.query(prompt, temperature=temperature)
         except Exception as e:
-            error_msg = str(e).lower()
-            
-            # Check if it's a rate limit or billing error
-            if any(keyword in error_msg for keyword in ['rate limit', 'quota', 'billing', 'credits', 'insufficient']):
-                print(f"\n⚠️  OpenAI API Error: {str(e)}")
-                print("🔄 Automatically falling back to local Ollama...")
-                print("=" * 60)
-                
-                # Switch to local mode
-                self.mode = "local"
-                self.model = "llama3"
-                print(f"✓ Switched to LOCAL MODE with model: {self.model}")
-                
-                # Retry with local Ollama
-                return self._query_local_llm(prompt)
-            else:
-                # For other errors, re-raise
-                raise
-    
-    def _query_groq_llm(self, prompt):
-        """Query Groq API with automatic fallback to local Ollama"""
-        print(f"Querying Groq API ({self.model})...")
+            print(f"❌ Provider {self.provider.name()} failed: {e}")
+            raise
+
+    def query_llm(self, prompt, temperature=0.3):
+        """
+        Query LLM (alias for generate, for backward compatibility).
         
-        try:
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": prompt
-                    }
-                ],
-                temperature=0.3
-            )
-            
-            return response.choices[0].message.content
-            
-        except Exception as e:
-            error_msg = str(e).lower()
-            
-            # Check if it's a rate limit or billing error
-            if any(keyword in error_msg for keyword in ['rate limit', 'quota', 'billing', 'credits', 'insufficient']):
-                print(f"\n⚠️  Groq API Error: {str(e)}")
-                print("🔄 Automatically falling back to local Ollama...")
-                print("=" * 60)
-                
-                # Switch to local mode
-                self.mode = "local"
-                self.model = "llama3"
-                print(f"✓ Switched to LOCAL MODE with model: {self.model}")
-                
-                # Retry with local Ollama
-                return self._query_local_llm(prompt)
-            else:
-                # For other errors, re-raise
-                raise
+        Args:
+            prompt: Text prompt to send to LLM
+            temperature: Sampling temperature (0.0-1.0)
+        
+        Returns:
+            str: LLM response text
+        """
+        return self.generate(prompt, temperature)
     
+    def sanitize_llm_json(self, text: str) -> str:
+        """
+        Sanitize common LLM JSON errors before parsing.
+        MINIMAL and SAFE - only fix known illegal escapes.
+        
+        This prevents credit burn from retrying on invalid JSON.
+        """
+        # Fix illegal apostrophe escape (most common LLM error)
+        text = text.replace("\\'", "'")
+        return text
+    
+    def clean_json_string(self, json_str):
+        """Clean common JSON formatting issues from LLM output"""
+        # Remove markdown code blocks
+        json_str = json_str.replace('```json', '').replace('```', '')
+        
+        # Remove trailing commas before closing braces/brackets
+        import re
+        json_str = re.sub(r',\s*}', '}', json_str)
+        json_str = re.sub(r',\s*]', ']', json_str)
+        
+        return json_str.strip()
+
     def parse_llm_response(self, response_text):
-        """Extract JSON from LLM response"""
+        """
+        Extract and parse JSON from LLM response.
+        Uses extract_and_parse_json which includes sanitization.
+        """
+        return self.extract_and_parse_json(response_text)
+    
+    def extract_and_parse_json(self, response_text):
+        """
+        Extract and parse JSON from LLM response.
+        Tries multiple strategies to handle common LLM formatting issues.
+        """
+        # Find JSON boundaries
         start_idx = response_text.find('{')
         end_idx = response_text.rfind('}') + 1
         
         if start_idx == -1 or end_idx == 0:
+            print(f"\nRaw response: {response_text}")
             raise ValueError("No JSON found in LLM response")
         
         json_str = response_text[start_idx:end_idx]
         
-        try:
-            data = json.loads(json_str)
-            return data
-        except json.JSONDecodeError as e:
-            print(f"Failed to parse JSON: {e}")
-            print(f"Raw response: {response_text}")
-            raise
+        # Sanitize first (fix illegal escapes)
+        json_str = self.sanitize_llm_json(json_str)
+        
+        # Try multiple parsing strategies
+        strategies = [
+            ("Direct parsing", lambda s: s),
+            ("After cleaning", self.clean_json_string),
+        ]
+        
+        last_error = None
+        for strategy_name, strategy_func in strategies:
+            try:
+                processed_json = strategy_func(json_str)
+                data = json.loads(processed_json)
+                if strategy_name != "Direct parsing":
+                    print(f"✓ Successfully parsed using: {strategy_name}")
+                return data
+            except json.JSONDecodeError as e:
+                last_error = e
+                continue
+        
+        # All strategies failed - show detailed error
+        print(f"\n{'='*60}")
+        print(f"❌ FAILED TO PARSE JSON (tried all strategies)")
+        print(f"{'='*60}")
+        print(f"Final error: {last_error}")
+        print(f"\nProblematic JSON (first 500 chars):")
+        print(json_str[:500])
+        print(f"\nFull raw response:")
+        print(response_text)
+        print(f"{'='*60}\n")
+        raise RuntimeError(f"Failed to parse LLM JSON response: {str(last_error)}")
     
     def convert_timestamp_to_seconds(self, timestamp_str):
         """Convert MM:SS to seconds"""
@@ -447,13 +455,7 @@ Output ONLY valid JSON, no extra text."""
         UPDATED: Better error handling
         """
         print("\n=== STAGE 1: Identifying complete ideas ===")
-        
-        # Show which mode is active
-        if self.is_permissive_mode():
-            print("  🔓 PERMISSIVE MODE (Ollama): Exploratory filtering, 5-15 ideas expected")
-        else:
-            print("  🔒 STRICT MODE (Groq/OpenAI): Selective filtering, 3-8 ideas expected")
-        
+        print("  🔒 STRICT MODE: Selective filtering, 3-10 ideas expected")
         print("  → Analyzing video content...")
         
         try:
@@ -477,7 +479,7 @@ Output ONLY valid JSON, no extra text."""
         """
         STAGE 2: Find all segments for one specific idea
         Returns: Segments with timestamps
-        UPDATED: Better error handling
+        UPDATED: No-retry guard for JSON failures
         """
         print(f"  → Finding segments for: '{idea['title']}'")
         
@@ -489,15 +491,32 @@ Output ONLY valid JSON, no extra text."""
             )
             
             response = self.query_llm(prompt)
-            segments_data = self.parse_llm_response(response)
+            
+            # Parse with sanitization (no retry on failure)
+            try:
+                segments_data = self.parse_llm_response(response)
+            except (json.JSONDecodeError, ValueError) as e:
+                # CRITICAL: Do NOT retry - this wastes credits
+                print(f"    ✗ JSON parse failed: {str(e)}")
+                print(f"    Raw response (first 300 chars): {response[:300]}...")
+                raise RuntimeError(f"Invalid JSON from LLM (no retry)")
+            
+            # Validate required keys
+            if 'segments' not in segments_data or 'reasoning' not in segments_data:
+                print(f"    ⚠️  Missing required keys (segments/reasoning)")
+                raise RuntimeError(f"Incomplete JSON response")
             
             num_segments = len(segments_data.get('segments', []))
             print(f"    ✓ Found {num_segments} segments")
             
             return segments_data
             
+        except RuntimeError:
+            # Re-raise RuntimeError (JSON failures)
+            raise
         except Exception as e:
             raise RuntimeError(f"Stage 2 failed for '{idea['title']}': {str(e)}")
+
     
     def enrich_segments(self, segments_data, transcript_data, idea_title):
         """
@@ -563,13 +582,14 @@ Output ONLY valid JSON, no extra text."""
                 'video_id': transcript_data['video_id'],
                 'source_url': transcript_data['source_url'],
                 'total_duration': transcript_data['duration'],
-                'model_used': f"{self.mode}:{self.model}",
+                'model_used': self.provider.get_model_name(),
                 'ideas_count': 0,
                 'ideas': []
             }
         
         # STAGE 2: Find segments for each idea
         enriched_ideas = []
+        skipped_ideas = 0  # Track JSON parse failures
         
         if ideas_list:
             print(f"\n=== STAGE 2: Finding segments for {len(ideas_list)} ideas ===")
@@ -617,16 +637,30 @@ Output ONLY valid JSON, no extra text."""
                     'transcript_excerpt': segments_data.get('transcript_excerpt', '')
                 })
                 
+            except RuntimeError as e:
+                # JSON parse failures - don't retry
+                error_msg = str(e)
+                if "Invalid JSON" in error_msg or "Incomplete JSON" in error_msg:
+                    skipped_ideas += 1
+                    print(f"    ⚠️  Skipped due to JSON error (no retry to preserve credits)")
+                else:
+                    print(f"    ✗ Error: {error_msg}")
+                continue
             except Exception as e:
                 print(f"    ✗ Error: {str(e)}")
                 continue
+        
+        
+        # Show summary of skipped ideas
+        if skipped_ideas > 0:
+            print(f"\n⚠️  Skipped {skipped_ideas} idea(s) due to JSON parse errors (no retries to preserve credits)")
         
         # Build final output
         output = {
             'video_id': transcript_data['video_id'],
             'source_url': transcript_data['source_url'],
             'total_duration': transcript_data['duration'],
-            'model_used': f"{self.mode}:{self.model}",
+            'model_used': self.provider.get_model_name(),
             'processing_method': 'two-stage',
             'ideas_count': len(enriched_ideas),
             'ideas': enriched_ideas
@@ -636,8 +670,8 @@ Output ONLY valid JSON, no extra text."""
     
     def save_output(self, data, output_dir="output"):
         """Save Brain output to JSON"""
-        mode_suffix = self.mode
-        output_path = Path(output_dir) / f"{data['video_id']}_ideas_{mode_suffix}.json"
+        provider_name = self.provider.name().lower()
+        output_path = Path(output_dir) / f"{data['video_id']}_ideas_{provider_name}.json"
         
         with open(output_path, 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
@@ -657,17 +691,15 @@ if __name__ == "__main__":
     
     if len(sys.argv) < 2:
         print("Usage: python brain.py <transcript_json_path> [mode]")
-        print("  mode: 'local' (default), 'openai', or 'groq'")
-        print("\nExamples:")
+        print("  mode: 'local' (default) or 'groq'")
+        print()
+        print("Examples:")
         print("  python brain.py output/VIDEO_ID_transcript.json")
         print("  python brain.py output/VIDEO_ID_transcript.json local")
-        print("  python brain.py output/VIDEO_ID_transcript.json openai")
         print("  python brain.py output/VIDEO_ID_transcript.json groq")
         sys.exit(1)
     
     transcript_path = sys.argv[1]
-    mode = sys.argv[2] if len(sys.argv) > 2 else "local"
-    
-    brain = Brain(mode=mode)
+    brain = Brain()
     ideas = brain.process(transcript_path)
     brain.save_output(ideas)

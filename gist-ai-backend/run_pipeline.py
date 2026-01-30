@@ -103,7 +103,32 @@ class GistPipeline:
         self.print_stage(2, "BRAIN (Two-Stage Processing)")
         
         try:
-            brain = Brain(mode=self.mode)
+            # Use provider system with automatic fallback
+            from brain.providers import ProviderFactory
+            
+            print("🔍 Initializing LLM provider chain...")
+            providers = ProviderFactory.create_provider_chain()
+            
+            # Select working provider with preflight checks
+            provider = ProviderFactory.select_provider_with_preflight(providers, skip_preflight=False)
+            
+            # Initialize Brain with selected provider
+            brain = Brain(provider=provider)
+            
+            print(f"✅ Using provider: {provider.get_model_name()}")
+            
+        except RuntimeError as e:
+            # CRITICAL: All providers failed preflight
+            error_msg = str(e)
+            print(f"\n❌ FATAL: {error_msg}")
+            print("\n  Please check your API keys in .env file:")
+            print("  - OPENROUTER_API_KEY (primary)")
+            print("  - GROQ_API_KEY (fallback)")
+            
+            # Re-raise to let caller (pipeline_runner.py) handle async updates
+            raise
+        
+        try:
             ideas_data = brain.process(transcript_path)
             ideas_path = brain.save_output(ideas_data)
             
@@ -130,10 +155,7 @@ class GistPipeline:
             elif "API key" in error_msg or "billing" in error_msg:
                 self.print_error("API authentication failed")
                 print("\n  Check your .env file has:")
-                if self.mode == 'openai':
-                    print("  OPENAI_API_KEY=sk-...")
-                    print("\n  Also verify billing at: https://platform.openai.com/account/billing")
-                elif self.mode == 'groq':
+                if self.mode == 'groq':
                     print("  GROQ_API_KEY=gsk-...")
                     print("\n  Get free key at: https://console.groq.com")
             else:
@@ -261,9 +283,9 @@ Examples:
     
     parser.add_argument(
         '--mode',
-        choices=['local', 'openai', 'groq'],
+        choices=['local', 'groq'],
         default='groq',
-        help='Brain mode: local (Ollama), openai (GPT), or groq (default: groq)'
+        help='Brain mode: local (Ollama) or groq (default: groq)'
     )
     
     parser.add_argument(

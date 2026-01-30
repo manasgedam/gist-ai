@@ -15,6 +15,8 @@ from .models import (
 from .database import get_db_session, init_db
 from .websocket_manager import ws_manager
 from .pipeline_runner import run_pipeline_task
+from .auth import get_current_user_id
+from typing import Optional
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -49,38 +51,112 @@ async def root():
 async def submit_youtube_video(
     request: VideoSubmitRequest,
     background_tasks: BackgroundTasks,
-    db: Session = Depends(get_db_session)
+    db: Session = Depends(get_db_session),
+    user_id: str = Depends(get_current_user_id)  # Always returns a value (never None)
 ):
-    """Submit a YouTube URL for processing"""
+    """
+    Submit a YouTube URL for processing
     
-    # Create video record
-    video = Video(
-        youtube_url=request.url,
-        status=ProcessingStage.PENDING,
-        current_stage=ProcessingStage.PENDING
-    )
-    db.add(video)
-    db.commit()
-    db.refresh(video)
+    Raises:
+        HTTPException 400: If project_id is missing or invalid format
+        HTTPException 404: If project does not exist
+        HTTPException 500: If database operation fails
+    """
     
-    # Also create in Supabase (dual-write)
+    # Validate required fields
+    if not request.project_id:
+        raise HTTPException(
+            status_code=400,
+            detail="project_id is required - videos must belong to a project"
+        )
+    
+    # Validate UUID format before DB access
+    import uuid
+    try:
+        uuid.UUID(request.project_id)
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid project_id format: must be a valid UUID"
+        )
+    
+    # Validate project exists and user owns it
+    try:
+        from api.project_repository import ProjectRepository
+        project = ProjectRepository.get_project(request.project_id)
+        if not project:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Project not found: {request.project_id}"
+            )
+        
+        # Verify user owns the project
+        if project['user_id'] != user_id:
+            raise HTTPException(
+                status_code=403,
+                detail="Access denied: You don't own this project"
+            )
+        
+    except HTTPException:
+        raise  # Re-raise HTTP exceptions
+    except Exception as e:
+        error_msg = str(e)
+        print(f"❌ Error validating project: {error_msg}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Database error while validating project: {error_msg}"
+        )
+    
+    # Create video record with error handling
+    try:
+        video = Video(
+            youtube_url=request.url,
+            status=ProcessingStage.PENDING,
+            current_stage=ProcessingStage.PENDING,
+            project_id=request.project_id,  # REQUIRED
+            user_id=user_id  # REQUIRED
+        )
+        db.add(video)
+        db.commit()
+        db.refresh(video)
+        print(f"✓ Created video in SQLite: {video.id}")
+        
+    except Exception as e:
+        db.rollback()  # CRITICAL: Rollback on error
+        error_msg = str(e)
+        print(f"❌ SQLite video creation failed: {error_msg}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to create video record: {error_msg}"
+        )
+    
+    # Create in Supabase (dual-write)
     try:
         from api.supabase_client import VideoRepository
         VideoRepository.create_video(
             source_url=request.url,
             source_type='youtube',
+            user_id=user_id,  # REQUIRED
+            project_id=request.project_id,  # REQUIRED
             youtube_id=None,  # Will be set after ingestion
             video_id=video.id  # Use same ID as SQLite
         )
         print(f"✓ Created video in Supabase: {video.id}")
         
-        # Update project status if linked
-        if request.project_id:
-            from api.project_repository import ProjectRepository
-            ProjectRepository.update_project(request.project_id, status='processing')
-            print(f"✓ Updated project {request.project_id} to processing")
+        # Update project status
+        ProjectRepository.update_project(request.project_id, status='processing')
+        print(f"✓ Updated project {request.project_id} to processing")
+        
     except Exception as e:
-        print(f"⚠ Warning: Supabase video creation failed: {e}")
+        # Supabase failure is critical - rollback SQLite
+        db.delete(video)
+        db.commit()
+        error_msg = str(e)
+        print(f"❌ Supabase video creation failed: {error_msg}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to create video in database: {error_msg}"
+        )
     
     # Start background processing
     background_tasks.add_task(run_pipeline_task, video.id, request.url, request.mode)
@@ -238,20 +314,6 @@ from fastapi import Header
 from .project_models import ProjectCreate, ProjectResponse, ProjectListResponse
 from .project_repository import ProjectRepository
 
-
-async def get_current_user_id(authorization: str = Header(None)) -> str:
-    """Extract user ID from authorization header"""
-    if not authorization or not authorization.startswith('Bearer '):
-        raise HTTPException(status_code=401, detail="Not authenticated")
-    
-    from api.supabase_client import supabase
-    token = authorization.replace('Bearer ', '')
-    
-    try:
-        user = supabase.auth.get_user(token)
-        return user.user.id
-    except Exception as e:
-        raise HTTPException(status_code=401, detail="Invalid token")
 
 
 @app.get("/api/projects", response_model=ProjectListResponse)

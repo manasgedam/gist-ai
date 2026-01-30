@@ -24,16 +24,12 @@ export function ProcessingProgress({
   message,
   error,
 }: ProcessingProgressProps) {
-  // Debug logging
-  console.log('🎨 ProcessingProgress render:', { currentStage, progress, message, error });
-  
   const getCurrentStageIndex = () => {
     if (!currentStage) return -1;
     return STAGES.findIndex((s) => s.id === currentStage);
   };
 
   const currentIndex = getCurrentStageIndex();
-  console.log('📍 Current stage index:', currentIndex, 'Stage:', currentStage);
 
   const getStageStatus = (index: number) => {
     if (error) return 'error';
@@ -43,34 +39,42 @@ export function ProcessingProgress({
   };
 
   return (
-    <div className="rounded-lg border border-border bg-secondary/30 p-5">
-      <div className="mb-4">
-        <h3 className="text-sm font-semibold text-foreground mb-1">Processing Your Video</h3>
+    <div className="space-y-4 rounded-lg border border-border bg-card p-6">
+      <div>
+        <p className="text-sm font-medium text-foreground">Processing Your Video</p>
         {error ? (
-          <p className="text-xs text-destructive">{error}</p>
+          <p className="mt-1 text-xs text-destructive">{error}</p>
         ) : (
-          <p className="text-xs text-muted-foreground">{message || 'Processing...'}</p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            {message || 'Processing...'}
+          </p>
         )}
       </div>
 
       {/* Progress Bar */}
-      <div className="mb-5">
-        <div className="h-2 w-full rounded-full bg-secondary overflow-hidden">
-          <div
-            className={`h-full transition-all duration-500 ${
-              error ? 'bg-destructive' : 'bg-primary'
-            }`}
-            style={{ width: `${progress}%` }}
-          />
-        </div>
-        <div className="flex justify-between mt-1">
-          <span className="text-xs text-muted-foreground">{progress}%</span>
+      <div className="space-y-2">
+        <div className="flex items-center justify-between text-xs">
+          <span className="text-muted-foreground">
+            {progress}%
+          </span>
           {!error && progress < 100 && (
-            <span className="text-xs text-muted-foreground">Processing...</span>
+            <span className="flex items-center gap-1.5 text-primary">
+              <Loader2 className="h-3 w-3 animate-spin" />
+              Processing...
+            </span>
           )}
           {progress === 100 && !error && (
-            <span className="text-xs text-primary font-medium">Complete!</span>
+            <span className="flex items-center gap-1.5 text-green-600">
+              <Check className="h-3 w-3" />
+              Complete!
+            </span>
           )}
+        </div>
+        <div className="h-2 overflow-hidden rounded-full bg-secondary">
+          <div
+            className="h-full bg-primary transition-all duration-300"
+            style={{ width: `${progress}%` }}
+          />
         </div>
       </div>
 
@@ -78,29 +82,28 @@ export function ProcessingProgress({
       <div className="space-y-3">
         {STAGES.map((stage, index) => {
           const status = getStageStatus(index);
-
           return (
             <div key={stage.id} className="flex items-start gap-3">
-              {/* Icon */}
+              {/* Icon - FIXED SIZE */}
               <div className="flex-shrink-0 mt-0.5">
                 {status === 'complete' && (
-                  <div className="rounded-full bg-primary/20 p-1">
-                    <Check className="h-3 w-3 text-primary" />
+                  <div className="rounded-full bg-primary p-1">
+                    <Check className="h-3.5 w-3.5 text-primary-foreground" />
                   </div>
                 )}
                 {status === 'active' && (
-                  <div className="rounded-full bg-primary/20 p-1">
-                    <Loader2 className="h-3 w-3 text-primary animate-spin" />
+                  <div className="rounded-full bg-primary/10 p-1">
+                    <Loader2 className="h-3.5 w-3.5 text-primary animate-spin" />
                   </div>
                 )}
                 {status === 'pending' && (
-                  <div className="rounded-full bg-muted p-1">
-                    <Circle className="h-3 w-3 text-muted-foreground" />
+                  <div className="rounded-full border-2 border-border p-1">
+                    <Circle className="h-3.5 w-3.5 text-transparent" />
                   </div>
                 )}
                 {status === 'error' && (
-                  <div className="rounded-full bg-destructive/20 p-1">
-                    <AlertCircle className="h-3 w-3 text-destructive" />
+                  <div className="rounded-full bg-destructive/10 p-1">
+                    <AlertCircle className="h-3.5 w-3.5 text-destructive" />
                   </div>
                 )}
               </div>
@@ -109,29 +112,17 @@ export function ProcessingProgress({
               <div className="flex-1 min-w-0">
                 <p
                   className={`text-sm font-medium ${
-                    status === 'active'
-                      ? 'text-foreground'
-                      : status === 'complete'
-                      ? 'text-muted-foreground'
-                      : status === 'error'
-                      ? 'text-destructive'
-                      : 'text-muted-foreground/60'
+                    status === 'pending' ? 'text-muted-foreground' : 'text-foreground'
                   }`}
                 >
                   {stage.label}
                 </p>
-                <p
-                  className={`text-xs ${
-                    status === 'active'
-                      ? 'text-muted-foreground'
-                      : 'text-muted-foreground/60'
-                  }`}
-                >
-                  {status === 'complete' 
-                    ? 'Complete' 
-                    : status === 'active' && message 
-                    ? message 
-                    : stage.description}
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  {status === 'complete'
+                    ? 'Complete'
+                    : status === 'active' && message
+                      ? message
+                      : stage.description}
                 </p>
               </div>
 
@@ -148,14 +139,11 @@ export function ProcessingProgress({
 
       {/* Error message */}
       {error && (
-        <div className="mt-4 rounded-md bg-destructive/10 border border-destructive/20 p-3">
-          <div className="flex items-start gap-2">
-            <AlertCircle className="h-4 w-4 text-destructive flex-shrink-0 mt-0.5" />
-            <div className="flex-1 min-w-0">
-              <p className="text-sm font-medium text-destructive">Processing Failed</p>
-              <p className="text-xs text-destructive/80 mt-1">{error}</p>
-            </div>
-          </div>
+        <div className="rounded-md border border-destructive/50 bg-destructive/10 p-3">
+          <p className="text-xs font-medium text-destructive mb-1">
+            Processing Failed
+          </p>
+          <p className="text-xs text-destructive/80">{error}</p>
         </div>
       )}
     </div>

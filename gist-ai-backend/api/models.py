@@ -27,6 +27,28 @@ class ProcessingStage:
 # SQLAlchemy Models
 # ============================================================================
 
+class Project(Base):
+    """
+    Project model for SQLite
+    
+    Note: Supabase has its own projects table managed via project_repository.py
+    This model is for SQLite foreign key integrity only.
+    """
+    __tablename__ = "projects"
+    
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id = Column(String, nullable=False)  # REQUIRED - user isolation
+    title = Column(String, nullable=False)
+    description = Column(Text, nullable=True)
+    status = Column(String, default="active")  # active, archived, deleted
+    
+    created_at = Column(String, default=lambda: datetime.datetime.now().isoformat())
+    updated_at = Column(String, default=lambda: datetime.datetime.now().isoformat())
+    
+    # Relationships
+    videos = relationship("Video", back_populates="project", cascade="all, delete-orphan")
+
+
 class Video(Base):
     __tablename__ = "videos"
 
@@ -34,22 +56,22 @@ class Video(Base):
     youtube_url = Column(String, nullable=False)
     youtube_id = Column(String, nullable=True)
     title = Column(String, nullable=True)
-    description = Column(Text, nullable=True)
     duration = Column(Integer, nullable=True)  # in seconds
-    thumbnail = Column(String, nullable=True)
-    video_path = Column(String, nullable=True)
-    audio_path = Column(String, nullable=True)
-    transcript_path = Column(String, nullable=True)
-    
     status = Column(String, default=ProcessingStage.PENDING)
     current_stage = Column(String, default=ProcessingStage.PENDING)
     progress = Column(Integer, default=0)
+    video_path = Column(String, nullable=True)
+    transcript_path = Column(String, nullable=True)
+    ideas_path = Column(String, nullable=True)
     error_message = Column(Text, nullable=True)
+    project_id = Column(String, ForeignKey("projects.id"), nullable=False)  # REQUIRED - videos MUST belong to a project
+    user_id = Column(String, nullable=False)  # REQUIRED - user isolation, no anonymous users
     
     created_at = Column(String, default=lambda: datetime.datetime.now().isoformat())
     updated_at = Column(String, default=lambda: datetime.datetime.now().isoformat())
 
     # Relationships
+    project = relationship("Project", back_populates="videos")
     ideas = relationship("Idea", back_populates="video", cascade="all, delete-orphan")
 
 
@@ -64,6 +86,7 @@ class Idea(Base):
     reason = Column(Text, nullable=True)
     strength = Column(String, nullable=True)
     viral_potential = Column(Float, nullable=True)
+    user_id = Column(String, nullable=False)  # REQUIRED - user isolation, no anonymous users
     
     # JSON fields for structured data
     highlights = Column(JSON, nullable=True)
@@ -81,7 +104,7 @@ class Idea(Base):
 
 class VideoSubmitRequest(BaseModel):
     url: str
-    project_id: Optional[str] = None
+    project_id: str  # REQUIRED - all videos must belong to a project
     mode: Optional[str] = "auto"
 
 

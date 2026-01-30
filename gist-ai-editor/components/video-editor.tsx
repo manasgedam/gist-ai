@@ -3,6 +3,7 @@
 import React from "react"
 
 import { useState, useCallback, useMemo } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { FileUp, Share2, Download, Play, Pause, Volume2, SkipBack, SkipForward } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { TopAppBar } from './editor/top-app-bar';
@@ -12,6 +13,9 @@ import { Timeline } from './editor/timeline';
 import { useVideoProcessing } from '@/lib/hooks/use-video-processing';
 
 export function VideoEditor() {
+  const searchParams = useSearchParams();
+  const projectId = searchParams.get('project');
+  
   const [projectName, setProjectName] = useState('Untitled Project');
   const [autoSave, setAutoSave] = useState('All changes saved');
   const [aspectRatio, setAspectRatio] = useState<'16:9' | '9:16'>('16:9');
@@ -31,7 +35,7 @@ export function VideoEditor() {
     videoTitle,
     ideas,
     isComplete,
-  } = useVideoProcessing();
+  } = useVideoProcessing(projectId);
 
   // Update duration when video metadata is available
   const handleDurationChange = useCallback((dur: number) => {
@@ -73,7 +77,7 @@ export function VideoEditor() {
       {/* Main Content Area */}
       <div className="flex flex-1 overflow-hidden">
         {/* Left Sidebar */}
-        <LeftSidebar selectedIdea={selectedIdea} onSelectIdea={setSelectedIdea} />
+        <LeftSidebar selectedIdea={selectedIdea} onSelectIdea={setSelectedIdea} projectId={projectId} />
 
         {/* Center Workspace */}
         <div className="flex flex-1 flex-col overflow-hidden border-l border-border">

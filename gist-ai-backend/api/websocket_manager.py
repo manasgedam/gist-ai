@@ -42,9 +42,9 @@ class WebSocketManager:
         
         message_json = json.dumps(message)
         
-        # Send to all active connections
+        # Send to all active connections (iterate over a copy to avoid set modification during iteration)
         disconnected = set()
-        for websocket in self.active_connections[video_id]:
+        for websocket in list(self.active_connections[video_id]):
             try:
                 await websocket.send_text(message_json)
             except Exception as e:

@@ -50,7 +50,7 @@ class ProjectRepository:
 
     @staticmethod
     def get_project_details(project_id: str):
-        """Get project with all related data (video, ideas, segments)"""
+        """Get project with ALL related data (videos, ideas, segments)"""
         from api.supabase_client import VideoRepository, IdeaRepository
         
         # Get project
@@ -58,19 +58,18 @@ class ProjectRepository:
         if not project:
             return None
         
-        # Get videos for this project
+        # Get ALL videos for this project
         videos = VideoRepository.get_videos_by_project(project_id)
-        video = videos[0] if videos else None
         
-        # Get ideas if video exists
-        ideas = []
-        if video:
+        # Get ideas for ALL videos
+        all_ideas = []
+        for video in videos:
             ideas = IdeaRepository.get_ideas_for_video(video['id'])
+            all_ideas.extend(ideas)
         
         return {
             'project': project,
-            'video': video,
-            'ideas': ideas,
-            'status': project.get('status', 'pending')
+            'videos': videos,  # ALL videos, not just first
+            'ideas': all_ideas,
+            'status': project.get('status', 'active')
         }
-

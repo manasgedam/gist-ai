@@ -25,6 +25,42 @@ class PipelineRunner:
         self.youtube_url = youtube_url
         self.mode = mode
         self.output_dir = Path("output")
+    
+    @staticmethod
+    def normalize_idea_data(idea_data: dict) -> dict:
+        """
+        Normalize idea data from brain output to database schema.
+        This creates a clear contract boundary between AI pipeline and database.
+        
+        Brain output fields:
+        - title: str
+        - description: str (from Stage 1)
+        - reasoning: str (from Stage 2, explains how segments connect)
+        - segments: list
+        - segment_count: int
+        - total_duration_seconds: float
+        - transcript_excerpt: str
+        
+        Database fields:
+        - title: str (NOT NULL)
+        - description: str (nullable)
+        - reason: str (nullable) - maps from 'reasoning'
+        - strength: str (nullable)
+        - viral_potential: float (nullable)
+        - highlights: JSON (nullable)
+        - time_ranges: JSON (nullable)
+        """
+        return {
+            'title': idea_data.get('title', ''),
+            'description': idea_data.get('description', ''),
+            'reason': idea_data.get('reasoning', ''),  # Map 'reasoning' to 'reason'
+            'strength': idea_data.get('strength', 'medium'),
+            'viral_potential': idea_data.get('viral_potential'),
+            'highlights': idea_data.get('highlights', []),
+            'segments': idea_data.get('segments', []),
+            'segment_count': idea_data.get('segment_count', 0),
+            'total_duration_seconds': idea_data.get('total_duration_seconds', 0)
+        }
         
     async def update_video_status(self, stage: ProcessingStage, progress: int, message: str, error: Optional[str] = None):
         """Update video status in database"""
@@ -44,8 +80,8 @@ class PipelineRunner:
         try:
             VideoRepository.update_processing_state(
                 self.video_id,
-                status=stage.value,
-                current_stage=stage.value,
+                status=stage,
+                current_stage=stage,
                 progress=progress,
                 message=error if error else None
             )
@@ -53,7 +89,7 @@ class PipelineRunner:
             print(f"  ⚠ Warning: Supabase state update failed: {e}")
         
         # Broadcast via WebSocket
-        await ws_manager.send_progress(self.video_id, stage.value, progress, message)
+        await ws_manager.send_progress(self.video_id, stage, progress, message)
     
     async def save_ideas_to_db(self, ideas_data: dict):
         """Parse ideas JSON and save to database"""
@@ -62,29 +98,36 @@ class PipelineRunner:
             if not video:
                 return
             
+            user_id = video.user_id  # Get user_id from video for isolation
+            
             # Clear existing ideas
             db.query(Idea).filter(Idea.video_id == self.video_id).delete()
             
             # Parse and save new ideas
-            for idea_data in ideas_data.get('ideas', []):
-                # Extract time ranges
+            for rank, idea_data in enumerate(ideas_data.get('ideas', []), 1):
+                # Normalize data to ensure correct field mapping
+                normalized = self.normalize_idea_data(idea_data)
+                
+                # Extract time ranges from segments
                 time_ranges = []
-                for tr in idea_data.get('time_ranges', []):
+                for segment in normalized['segments']:
                     time_ranges.append({
-                        "start": tr.get('start', 0),
-                        "end": tr.get('end', 0),
-                        "confidence": tr.get('confidence', 1.0)
+                        "start": segment.get('start_seconds', 0),
+                        "end": segment.get('end_seconds', 0),
+                        "confidence": 1.0
                     })
                 
                 idea = Idea(
                     video_id=self.video_id,
-                    rank=idea_data.get('rank', 0),
-                    title=idea_data.get('title', ''),
-                    description=idea_data.get('reason', ''),
-                    strength=idea_data.get('strength', 'medium'),
-                    viral_potential=idea_data.get('viral_potential'),
-                    highlights=idea_data.get('highlights', []),
-                    time_ranges=time_ranges
+                    rank=rank,
+                    title=normalized['title'],
+                    description=normalized['description'],
+                    reason=normalized['reason'],  # Correctly mapped from 'reasoning'
+                    strength=normalized['strength'],
+                    viral_potential=normalized['viral_potential'],
+                    highlights=normalized['highlights'],
+                    time_ranges=time_ranges,
+                    user_id=user_id  # User isolation
                 )
                 db.add(idea)
             
@@ -98,17 +141,22 @@ class PipelineRunner:
             IdeaRepository.delete_ideas_for_video(self.video_id)
             
             # Save new ideas and segments
-            for idea_data in ideas_data.get('ideas', []):
+            for rank, idea_data in enumerate(ideas_data.get('ideas', []), 1):
+                # Normalize data to ensure correct field mapping
+                normalized = self.normalize_idea_data(idea_data)
+                
                 # Create idea in Supabase
                 idea = IdeaRepository.create_idea(
                     video_id=self.video_id,
-                    rank=idea_data.get('rank', 0) + 1,  # Convert 0-indexed to 1-indexed
-                    title=idea_data.get('title', ''),
-                    description=idea_data.get('reason', ''),
-                    strength=idea_data.get('strength', 'medium'),
-                    viral_potential=idea_data.get('viral_potential'),
-                    total_duration=idea_data.get('total_duration_seconds'),
-                    segment_count=idea_data.get('segment_count')
+                    rank=rank,
+                    title=normalized['title'],
+                    description=normalized['description'],
+                    reason=normalized['reason'],  # Correctly mapped from 'reasoning'
+                    strength=normalized['strength'],
+                    viral_potential=normalized['viral_potential'],
+                    total_duration=normalized['total_duration_seconds'],
+                    segment_count=normalized['segment_count'],
+                    user_id=user_id  # User isolation
                 )
                 
                 idea_id = idea['id']
@@ -163,7 +211,7 @@ class PipelineRunner:
                 )
                 await ws_manager.send_error(
                     self.video_id,
-                    ProcessingStage.INGESTING.value,
+                    ProcessingStage.INGESTING,
                     "Ingestion failed",
                     "Could not download or process the video"
                 )
@@ -196,21 +244,27 @@ class PipelineRunner:
                 video_path = Path(transcript_data.get('video_file_path', ''))
                 audio_path = transcript_path.parent / f"{yt_id}_audio.mp3"
                 
-                # Upload to R2
+                # Upload to R2 - CRITICAL: Abort on failure
                 video_url = None
                 audio_url = None
                 transcript_url = None
                 
                 if video_path.exists():
                     video_url = r2_storage.upload_video(self.video_id, str(video_path), 'original')
+                    if not video_url:
+                        raise RuntimeError("Failed to upload video to R2 storage")
                     print(f"  ✓ Video uploaded: {video_url}")
                 
                 if audio_path.exists():
                     audio_url = r2_storage.upload_video(self.video_id, str(audio_path), 'audio')
+                    if not audio_url:
+                        raise RuntimeError("Failed to upload audio to R2 storage")
                     print(f"  ✓ Audio uploaded: {audio_url}")
                 
                 if transcript_path.exists():
                     transcript_url = r2_storage.upload_video(self.video_id, str(transcript_path), 'transcript')
+                    if not transcript_url:
+                        raise RuntimeError("Failed to upload transcript to R2 storage")
                     print(f"  ✓ Transcript uploaded: {transcript_url}")
                 
                 # Save to Supabase
@@ -229,28 +283,32 @@ class PipelineRunner:
                 )
                 print(f"  ✓ Metadata saved to Supabase")
                 
-                # Clean up local files after successful upload
-                print(f"🗑️  Cleaning up local files...")
-                try:
-                    if video_path.exists():
-                        video_path.unlink()
-                        print(f"  ✓ Deleted local video: {video_path.name}")
-                    
-                    if audio_path.exists():
-                        audio_path.unlink()
-                        print(f"  ✓ Deleted local audio: {audio_path.name}")
-                    
-                    if transcript_path.exists():
-                        transcript_path.unlink()
-                        print(f"  ✓ Deleted local transcript: {transcript_path.name}")
-                    
-                    print(f"  ✓ Local files cleaned up")
-                except Exception as cleanup_error:
-                    print(f"  ⚠ Warning: File cleanup failed: {cleanup_error}")
+                # NOTE: Cleanup moved to end of pipeline (after Brain stage)
+                # Brain needs to read transcript.json, so we can't delete it yet
                 
             except Exception as e:
-                print(f"  ⚠ Warning: Cloud storage failed: {e}")
-                # Continue processing even if cloud storage fails
+                # CRITICAL: Abort pipeline on upload failure
+                error_msg = str(e)
+                print(f"❌ Cloud storage failed: {error_msg}")
+                
+                # Update database with failure
+                await self.update_video_status(
+                    ProcessingStage.FAILED,
+                    0,
+                    f"Upload failed: {error_msg}",
+                    error=error_msg
+                )
+                
+                # Send WebSocket failure event
+                await ws_manager.send_message(self.video_id, {
+                    "type": "upload_failed",
+                    "video_id": self.video_id,
+                    "error": "Failed to upload files to cloud storage. Please try again.",
+                    "stage": "upload",
+                    "technical_error": error_msg
+                })
+                
+                raise  # Abort pipeline
             
             # Emit video_ready event with metadata so frontend can load video immediately
             await ws_manager.send_message(self.video_id, {
@@ -269,8 +327,8 @@ class PipelineRunner:
             )
             await ws_manager.send_stage_complete(
                 self.video_id,
-                ProcessingStage.INGESTING.value,
-                ProcessingStage.TRANSCRIBING.value
+                ProcessingStage.INGESTING,
+                ProcessingStage.TRANSCRIBING
             )
             
             # Stage 3: Understanding - Brain Stage 1 (Identifying Ideas)
@@ -281,15 +339,80 @@ class PipelineRunner:
             )
             await ws_manager.send_stage_complete(
                 self.video_id,
-                ProcessingStage.TRANSCRIBING.value,
-                ProcessingStage.UNDERSTANDING.value
+                ProcessingStage.TRANSCRIBING,
+                ProcessingStage.UNDERSTANDING
             )
+            
             
             # Run brain processing (includes understanding, grouping, ranking)
             # CRITICAL: Run in thread pool to prevent blocking the event loop
-            ideas_path = await asyncio.to_thread(
-                pipeline.run_brain, transcript_path
-            )
+            # Stage 2: Brain (Two-Stage Processing)
+            try:
+                ideas_path = await asyncio.get_event_loop().run_in_executor(
+                    None,
+                    pipeline.run_brain, transcript_path
+                )
+            except RuntimeError as e:
+                # Provider preflight failure
+                error_msg = str(e)
+                if "All providers failed preflight" in error_msg:
+                    print(f"\n❌ FATAL: {error_msg}")
+                    
+                    # Update database with failure
+                    await self.update_video_status(
+                        ProcessingStage.FAILED,
+                        0,
+                        "LLM provider unavailable - check API keys",
+                        error=error_msg
+                    )
+                    
+                    # Send WebSocket failure event
+                    await ws_manager.send_message(self.video_id, {
+                        "type": "provider_failed",
+                        "video_id": self.video_id,
+                        "error": "No LLM providers available. Please check your API keys in settings.",
+                        "stage": "brain_init",
+                        "technical_error": error_msg
+                    })
+                    
+                    return  # Abort pipeline
+                else:
+                    # Other RuntimeError, re-raise
+                    raise
+            except ValueError as e:
+                # Model validation error or configuration issue
+                error_msg = str(e)
+                print(f"✗ Brain initialization error: {error_msg}")
+                await self.update_video_status(
+                    ProcessingStage.FAILED,
+                    0,
+                    f"Invalid model configuration: {error_msg}",
+                    error=error_msg
+                )
+                await ws_manager.send_error(
+                    self.video_id,
+                    ProcessingStage.UNDERSTANDING,
+                    "Model configuration error",
+                    error_msg
+                )
+                return
+            except Exception as e:
+                # Other Brain processing errors
+                error_msg = str(e)
+                print(f"✗ Brain processing error: {error_msg}")
+                await self.update_video_status(
+                    ProcessingStage.FAILED,
+                    0,
+                    f"Brain processing failed: {error_msg}",
+                    error=error_msg
+                )
+                await ws_manager.send_error(
+                    self.video_id,
+                    ProcessingStage.UNDERSTANDING,
+                    "Brain processing failed",
+                    error_msg
+                )
+                return
             
             if not ideas_path:
                 await self.update_video_status(
@@ -300,7 +423,7 @@ class PipelineRunner:
                 )
                 await ws_manager.send_error(
                     self.video_id,
-                    ProcessingStage.RANKING.value,
+                    ProcessingStage.RANKING,
                     "No ideas generated",
                     "Could not find usable ideas in this video"
                 )
@@ -315,8 +438,8 @@ class PipelineRunner:
             )
             await ws_manager.send_stage_complete(
                 self.video_id,
-                ProcessingStage.UNDERSTANDING.value,
-                ProcessingStage.GROUPING.value
+                ProcessingStage.UNDERSTANDING,
+                ProcessingStage.GROUPING
             )
             
             # Stage 5: Ranking complete
@@ -327,8 +450,8 @@ class PipelineRunner:
             )
             await ws_manager.send_stage_complete(
                 self.video_id,
-                ProcessingStage.GROUPING.value,
-                ProcessingStage.RANKING.value
+                ProcessingStage.GROUPING,
+                ProcessingStage.RANKING
             )
             
             # Update video with ideas path
@@ -344,16 +467,70 @@ class PipelineRunner:
             
             await self.save_ideas_to_db(ideas_data)
             
-            # Complete
+            # Stage 6: Cleanup local files (after all stages that need them)
+            print(f"🗑️  Cleaning up local files...")
+            try:
+                # Get file paths from transcript
+                with open(transcript_path, 'r') as f:
+                    transcript_data = json.load(f)
+                
+                video_path = Path(transcript_data.get('video_file_path', ''))
+                audio_path = transcript_path.parent / f"{yt_id}_audio.mp3"
+                
+                if video_path.exists():
+                    video_path.unlink()
+                    print(f"  ✓ Deleted local video: {video_path.name}")
+                
+                if audio_path.exists():
+                    audio_path.unlink()
+                    print(f"  ✓ Deleted local audio: {audio_path.name}")
+                
+                if transcript_path.exists():
+                    transcript_path.unlink()
+                    print(f"  ✓ Deleted local transcript: {transcript_path.name}")
+                
+                print(f"  ✓ Local files cleaned up")
+            except Exception as cleanup_error:
+                print(f"  ⚠ Warning: File cleanup failed: {cleanup_error}")
+                # Don't fail the pipeline if cleanup fails
+            
+            # Stage 7: Complete (Atomic)
+            # 1. Update SQLite status
             await self.update_video_status(
                 ProcessingStage.COMPLETE,
                 100,
                 f"Processing complete! {ideas_data.get('ideas_count', 0)} ideas generated."
             )
+            
+            # 2. Mark complete in Supabase (atomic: status + progress + timestamp)
+            try:
+                VideoRepository.mark_completed(self.video_id)
+                print(f"✓ Marked video {self.video_id} as COMPLETE in Supabase")
+            except Exception as e:
+                print(f"⚠ Warning: Supabase completion update failed: {e}")
+            
+            # 3. Send WebSocket completion event
             await ws_manager.send_complete(
                 self.video_id,
                 ideas_data.get('ideas_count', 0)
             )
+            
+            # 4. Update project status to READY
+            try:
+                from api.project_repository import ProjectRepository
+                # Get video to find project_id
+                with get_db() as db:
+                    video = db.query(Video).filter(Video.id == self.video_id).first()
+                    if video and video.project_id:
+                        ProjectRepository.update_project(
+                            video.project_id,
+                            status='ready',
+                            ideas_count=ideas_data.get('ideas_count', 0)
+                        )
+                        print(f"✓ Updated project {video.project_id} to READY with {ideas_data.get('ideas_count', 0)} ideas")
+            except Exception as e:
+                print(f"⚠ Warning: Project status update failed: {e}")
+                # Don't fail pipeline if project update fails
             
         except Exception as e:
             print(f"Pipeline error: {str(e)}")

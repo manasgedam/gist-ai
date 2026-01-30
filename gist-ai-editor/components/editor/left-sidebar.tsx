@@ -12,6 +12,7 @@ import { useVideoProcessing } from '@/lib/hooks/use-video-processing';
 interface LeftSidebarProps {
   selectedIdea: string | null;
   onSelectIdea: (id: string) => void;
+  projectId?: string | null;
 }
 
 const OTHER_TOPICS = [
@@ -21,7 +22,7 @@ const OTHER_TOPICS = [
   'Results Summary',
 ];
 
-export function LeftSidebar({ selectedIdea, onSelectIdea }: LeftSidebarProps) {
+export function LeftSidebar({ selectedIdea, onSelectIdea, projectId }: LeftSidebarProps) {
   const [activeTab, setActiveTab] = useState<'upload' | 'ideas' | 'edit' | 'transitions' | 'subtitles' | 'export'>('upload');
   const [isGistExpanded, setIsGistExpanded] = useState(true);
   const [isOtherExpanded, setIsOtherExpanded] = useState(true);
@@ -44,11 +45,11 @@ export function LeftSidebar({ selectedIdea, onSelectIdea }: LeftSidebarProps) {
     error,
     submitVideo,
     reset,
-  } = useVideoProcessing();
+  } = useVideoProcessing(projectId);
 
   // Handle YouTube URL submission
   const handleVideoSubmit = async (url: string) => {
-    await submitVideo(url, 'groq');
+    await submitVideo(url, 'groq');  // Using Gemini while Groq credits are exhausted
   };
 
   // Handle reset/new upload
@@ -93,7 +94,7 @@ export function LeftSidebar({ selectedIdea, onSelectIdea }: LeftSidebarProps) {
       </div>
 
       {/* Content Area */}
-      <ScrollArea className="flex-1">
+      <ScrollArea className="flex-1 overflow-scroll">
         <div className="p-4">
           {activeTab === 'upload' && (
             <div className="space-y-4">
@@ -151,7 +152,7 @@ export function LeftSidebar({ selectedIdea, onSelectIdea }: LeftSidebarProps) {
               )}
 
               {/* Show error state with retry option */}
-              {error && status === 'FAILED' && (
+              {error && status === 'failed' && (
                 <div className="rounded-lg border border-destructive/20 bg-destructive/10 p-5">
                   <div className="flex items-start gap-3 mb-4">
                     <div className="rounded-full bg-destructive/20 p-2">

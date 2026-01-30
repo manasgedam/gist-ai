@@ -1,6 +1,6 @@
 // API client for Gist AI backend
 
-import { getAuthToken } from '@/lib/supabase';
+import { api } from './fetch';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 const WS_BASE_URL = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000';
@@ -62,59 +62,33 @@ export const videoApi = {
   /**
    * Submit a YouTube URL for processing
    */
-  async submitYouTubeUrl(url: string, mode: string = 'groq'): Promise<VideoResponse> {
-    const response = await fetch(`${API_BASE_URL}/api/videos/youtube`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ url, mode }),
+  async submitYouTubeUrl(url: string, projectId: string, mode: string = 'groq'): Promise<VideoResponse> {
+    return api.post('/api/videos/youtube', {
+      url,
+      project_id: projectId,
+      mode,
     });
-
-    if (!response.ok) {
-      throw new Error(`Failed to submit video: ${response.statusText}`);
-    }
-
-    return response.json();
   },
 
   /**
    * Get video processing status
    */
   async getVideoStatus(videoId: string): Promise<StatusResponse> {
-    const response = await fetch(`${API_BASE_URL}/api/videos/${videoId}`);
-
-    if (!response.ok) {
-      throw new Error(`Failed to get video status: ${response.statusText}`);
-    }
-
-    return response.json();
+    return api.get(`/api/videos/${videoId}`);
   },
 
   /**
    * Get generated ideas for a video
    */
   async getVideoIdeas(videoId: string): Promise<IdeasResponse> {
-    const response = await fetch(`${API_BASE_URL}/api/videos/${videoId}/ideas`);
-
-    if (!response.ok) {
-      throw new Error(`Failed to get ideas: ${response.statusText}`);
-    }
-
-    return response.json();
+    return api.get(`/api/videos/${videoId}/ideas`);
   },
 
   /**
    * Get video timeline data
    */
   async getVideoTimeline(videoId: string): Promise<TimelineResponse> {
-    const response = await fetch(`${API_BASE_URL}/api/videos/${videoId}/timeline`);
-
-    if (!response.ok) {
-      throw new Error(`Failed to get timeline: ${response.statusText}`);
-    }
-
-    return response.json();
+    return api.get(`/api/videos/${videoId}/timeline`);
   },
 
   /**
@@ -152,5 +126,12 @@ export const videoApi = {
     };
 
     return ws;
+  },
+
+  /**
+   * Get complete project details (project, video, ideas)
+   */
+  async getProjectDetails(projectId: string): Promise<any> {
+    return api.get(`/api/projects/${projectId}/details`);
   },
 };

@@ -22,7 +22,9 @@ export interface UseVideoProcessingReturn {
   reset: () => void;
 }
 
-const STORAGE_KEY = 'gist-ai-video-processing';
+const getStorageKey = (projectId: string | null) => {
+  return projectId ? `gist-ai-video-processing-${projectId}` : 'gist-ai-video-processing';
+};
 
 interface PersistedState {
   videoId: string;
@@ -30,10 +32,11 @@ interface PersistedState {
   status: string;
   progress: number;
   currentStage: string;
+  projectId: string | null;
   timestamp: number;
 }
 
-export function useVideoProcessing(): UseVideoProcessingReturn {
+export function useVideoProcessing(projectId: string | null = null): UseVideoProcessingReturn {
   const [videoId, setVideoId] = useState<string | null>(null);
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
   const [videoStreamUrl, setVideoStreamUrl] = useState<string | null>(null);
@@ -57,40 +60,66 @@ export function useVideoProcessing(): UseVideoProcessingReturn {
     videoIdRef.current = videoId;
   }, [videoId]);
 
-  const isProcessing = status !== null && status !== 'COMPLETE' && status !== 'FAILED';
-  const isComplete = status === 'COMPLETE';
+  const isProcessing = status !== null && status !== 'complete' && status !== 'failed';
+  const isComplete = status === 'complete';
 
   // Save state to localStorage whenever it changes
   useEffect(() => {
-    if (videoId && status && status !== 'COMPLETE' && status !== 'FAILED') {
+    const storageKey = getStorageKey(projectId);
+    if (videoId && status && status !== 'complete' && status !== 'failed') {
       const state: PersistedState = {
         videoId,
         videoUrl: videoUrl || '',
         status,
         progress,
         currentStage: currentStage || '',
+        projectId,
         timestamp: Date.now(),
       };
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-    } else if (status === 'COMPLETE' || status === 'FAILED') {
+      localStorage.setItem(storageKey, JSON.stringify(state));
+    } else if (status === 'complete' || status === 'failed') {
       // Clear storage when processing is done
-      localStorage.removeItem(STORAGE_KEY);
+      localStorage.removeItem(storageKey);
     }
-  }, [videoId, videoUrl, status, progress, currentStage]);
+  }, [videoId, videoUrl, status, progress, currentStage, projectId]);
 
   // Restore state from localStorage on mount
   useEffect(() => {
+    const clearStorageIfNeeded = () => {
+      const storageKey = getStorageKey(projectId);
+      const stored = localStorage.getItem(storageKey);
+      
+      if (stored) {
+        const data: PersistedState = JSON.parse(stored);
+        
+        // CRITICAL: Clear localStorage for terminal states (COMPLETE/FAILED)
+        // Database is source of truth, not localStorage
+        if (data.status === 'COMPLETE' || data.status === 'FAILED') {
+          console.log('🧹 Clearing localStorage for completed/failed project');
+          localStorage.removeItem(storageKey);
+        }
+        
+        // Also clear if projectId changed (stale data)
+        if (data.projectId !== projectId) {
+          console.log('🧹 Clearing localStorage for different project');
+          localStorage.removeItem(storageKey);
+        }
+      }
+    };
+    clearStorageIfNeeded(); // Call it immediately
+
     const restoreState = async () => {
-      const stored = localStorage.getItem(STORAGE_KEY);
+      const storageKey = getStorageKey(projectId);
+      const stored = localStorage.getItem(storageKey);
       if (!stored) return;
 
       try {
         const state: PersistedState = JSON.parse(stored);
         
-        // Only restore if less than 24 hours old
+        // Only restore if less than 24 hours old AND matches current project
         const age = Date.now() - state.timestamp;
-        if (age > 24 * 60 * 60 * 1000) {
-          localStorage.removeItem(STORAGE_KEY);
+        if (age > 24 * 60 * 60 * 1000 || state.projectId !== projectId) {
+          localStorage.removeItem(storageKey);
           return;
         }
 
@@ -114,7 +143,7 @@ export function useVideoProcessing(): UseVideoProcessingReturn {
           setMessage(statusResponse.message);
 
           // If complete, fetch ideas and metadata
-          if (statusResponse.status === 'COMPLETE') {
+          if (statusResponse.status === 'complete') {
             const ideasResponse = await videoApi.getVideoIdeas(state.videoId);
             setIdeas(ideasResponse.ideas);
             
@@ -123,10 +152,10 @@ export function useVideoProcessing(): UseVideoProcessingReturn {
             setVideoDuration(timeline.duration);
             setVideoTitle(timeline.title);
             
-            localStorage.removeItem(STORAGE_KEY);
-          } else if (statusResponse.status === 'FAILED') {
+            localStorage.removeItem(storageKey);
+          } else if (statusResponse.status === 'failed') {
             setError('Processing failed');
-            localStorage.removeItem(STORAGE_KEY);
+            localStorage.removeItem(storageKey);
           } else {
             // Still processing - reconnect WebSocket and start polling
             try {
@@ -142,16 +171,92 @@ export function useVideoProcessing(): UseVideoProcessingReturn {
           }
         } catch (err) {
           console.error('Failed to restore video state:', err);
-          localStorage.removeItem(STORAGE_KEY);
+          localStorage.removeItem(storageKey);
         }
       } catch (err) {
         console.error('Failed to parse stored state:', err);
-        localStorage.removeItem(STORAGE_KEY);
+        localStorage.removeItem(storageKey);
+      }
+    };
+
+    const loadExistingVideo = async () => {
+      const storageKey = getStorageKey(projectId);
+      const stored = localStorage.getItem(storageKey);
+      
+      // If projectId is provided and no localStorage state, try to load from API
+      if (projectId && !stored) {
+        try {
+          console.log('🔍 Loading project details from API:', projectId);
+          const details = await videoApi.getProjectDetails(projectId);
+          
+          if (details && details.video) {
+            const video = details.video;
+            const ideas = details.ideas || [];
+            
+            console.log('✅ Found project with video, loading data...');
+            console.log('  Video ID:', video.id);
+            console.log('  Status:', video.status);
+            console.log('  Ideas:', ideas.length);
+            
+            // Set video ID and status
+            setVideoId(video.id);
+            videoIdRef.current = video.id;
+            setStatus(video.status);
+            setProgress(video.progress || 0);
+            setCurrentStage(video.current_stage || video.status);
+            
+            // If complete, load all data
+            if (video.status === 'COMPLETE') {
+              setMessage('Video loaded');
+              
+              // Set ideas
+              setIdeas(ideas);
+              
+              // Fetch video metadata
+              try {
+                const timeline = await videoApi.getVideoTimeline(video.id);
+                setVideoStreamUrl(timeline.video_url);
+                setVideoDuration(timeline.duration);
+                setVideoTitle(timeline.title);
+              } catch (err) {
+                console.error('Failed to fetch video metadata:', err);
+                // Use video data from details if timeline fetch fails
+                setVideoTitle(video.title || 'Unknown');
+                setVideoDuration(video.duration || 0);
+                setVideoStreamUrl(`/api/videos/${video.id}/stream`);
+              }
+            } else if (video.status === 'FAILED') {
+              setError(video.error_message || 'Processing failed');
+              setMessage(video.error_message || 'Processing failed');
+            } else {
+              // Still processing - reconnect WebSocket and start polling
+              setMessage('Reconnecting to video processing...');
+              
+              try {
+                wsRef.current = videoApi.connectWebSocket(video.id, handleWebSocketMessage);
+              } catch (wsError) {
+                console.warn('WebSocket reconnection failed:', wsError);
+              }
+
+              // Start polling
+              pollingIntervalRef.current = setInterval(() => {
+                pollStatus(video.id);
+              }, 2000);
+            }
+          } else {
+            console.log('No video found for project:', projectId);
+          }
+        } catch (err) {
+          // Project doesn't exist or error loading - that's fine, user can upload new one
+          console.log('No existing project/video found:', projectId, err);
+        }
       }
     };
 
     restoreState();
-  }, []); // Only run on mount
+    loadExistingVideo();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId]); // Re-run when projectId changes
 
   // Fetch video metadata when video ID is available
   const fetchVideoMetadata = useCallback(async (vid: string) => {
@@ -197,10 +302,10 @@ export function useVideoProcessing(): UseVideoProcessingReturn {
 
       case 'complete':
         console.log('🎉 Processing complete!');
-        setStatus('COMPLETE');
+        setStatus('complete');
         setProgress(100);
         setMessage(messageData.message);
-        setCurrentStage('COMPLETE');
+        setCurrentStage('complete');
         if (currentVideoId) {
           videoApi.getVideoIdeas(currentVideoId).then((response) => {
             setIdeas(response.ideas);
@@ -213,7 +318,7 @@ export function useVideoProcessing(): UseVideoProcessingReturn {
 
       case 'error':
         console.error('❌ Processing error:', messageData.message);
-        setStatus('FAILED');
+        setStatus('failed');
         setError(messageData.message || 'Processing failed');
         setMessage(messageData.message);
         break;
@@ -240,7 +345,7 @@ export function useVideoProcessing(): UseVideoProcessingReturn {
       }
 
       // If complete, fetch ideas and metadata
-      if (statusResponse.status === 'COMPLETE') {
+      if (statusResponse.status === 'complete') {
         const ideasResponse = await videoApi.getVideoIdeas(vid);
         setIdeas(ideasResponse.ideas);
         fetchVideoMetadata(vid);
@@ -250,7 +355,7 @@ export function useVideoProcessing(): UseVideoProcessingReturn {
           clearInterval(pollingIntervalRef.current);
           pollingIntervalRef.current = null;
         }
-      } else if (statusResponse.status === 'FAILED') {
+      } else if (statusResponse.status === 'failed') {
         setError('Processing failed');
         
         // Stop polling
@@ -280,7 +385,7 @@ export function useVideoProcessing(): UseVideoProcessingReturn {
       setCurrentStage('PENDING');
       setMessage('Submitting video...');
 
-      const response = await videoApi.submitYouTubeUrl(url, mode);
+      const response = await videoApi.submitYouTubeUrl(url, projectId!, mode);
       
       // CRITICAL: Set videoId in BOTH state and ref before connecting WebSocket
       setVideoId(response.video_id);
@@ -303,12 +408,13 @@ export function useVideoProcessing(): UseVideoProcessingReturn {
 
     } catch (err: any) {
       setError(err.message || 'Failed to submit video');
-      setStatus('FAILED');
+      setStatus('failed');
     }
   }, [handleWebSocketMessage, pollStatus]);
 
   // Reset state
   const reset = useCallback(() => {
+    const storageKey = getStorageKey(projectId);
     setVideoId(null);
     videoIdRef.current = null;
     setVideoUrl(null);
@@ -335,8 +441,8 @@ export function useVideoProcessing(): UseVideoProcessingReturn {
     }
 
     // Clear localStorage
-    localStorage.removeItem(STORAGE_KEY);
-  }, []);
+    localStorage.removeItem(storageKey);
+  }, [projectId]);
 
   // Cleanup on unmount
   useEffect(() => {

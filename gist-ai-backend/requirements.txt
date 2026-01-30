@@ -2,7 +2,7 @@ yt-dlp
 openai-whisper
 ffmpeg
 ollama
-openai
+openai  # Required by OpenRouter for API compatibility (NOT for OpenAI service)
 dotenv
 groq
 moviepy
@@ -12,3 +12,5 @@ websockets==12.0
 sqlalchemy==2.0.23
 pydantic==2.5.0
 python-multipart==0.0.6
+supabase
+huggingface_hub
