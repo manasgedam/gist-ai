@@ -28,13 +28,25 @@ export function VideoEditor() {
     duration: 0
   });
 
-  // Get video processing state from hook (shared with LeftSidebar via re-render)
+  // Get video processing state from hook - SINGLE SOURCE OF TRUTH
+  // Passed to LeftSidebar as props to avoid duplicate hook instances
   const {
+    videoId,
+    videoUrl,
     videoStreamUrl,
     videoDuration,
     videoTitle,
+    status,
+    progress,
+    currentStage,
+    message,
     ideas,
+    isLoading,
+    isProcessing,
     isComplete,
+    error,
+    submitVideo,
+    reset,
   } = useVideoProcessing(projectId);
 
   // Update duration when video metadata is available
@@ -76,8 +88,25 @@ export function VideoEditor() {
 
       {/* Main Content Area */}
       <div className="flex flex-1 overflow-hidden">
-        {/* Left Sidebar */}
-        <LeftSidebar selectedIdea={selectedIdea} onSelectIdea={setSelectedIdea} projectId={projectId} />
+        {/* Left Sidebar - receives all video processing state as props */}
+        <LeftSidebar
+          selectedIdea={selectedIdea}
+          onSelectIdea={setSelectedIdea}
+          projectId={projectId}
+          videoId={videoId}
+          videoStreamUrl={videoStreamUrl}
+          status={status}
+          progress={progress}
+          currentStage={currentStage}
+          message={message}
+          ideas={ideas}
+          isLoading={isLoading}
+          isProcessing={isProcessing}
+          isComplete={isComplete}
+          error={error}
+          submitVideo={submitVideo}
+          reset={reset}
+        />
 
         {/* Center Workspace */}
         <div className="flex flex-1 flex-col overflow-hidden border-l border-border">

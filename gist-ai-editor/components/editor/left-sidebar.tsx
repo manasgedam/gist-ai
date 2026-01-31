@@ -1,18 +1,32 @@
 'use client';
 
 import { useState } from 'react';
-import { Upload, BookOpen, Sparkles, Zap, Type, Settings, Wand2, Download, Share2, Scissors } from 'lucide-react';
+import { Upload, BookOpen, Sparkles, Zap, Type, Settings, Wand2, Download, Share2, Scissors, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { IdeaCard } from './idea-card';
 import { VideoUpload } from './video-upload';
 import { ProcessingProgress } from './processing-progress';
-import { useVideoProcessing } from '@/lib/hooks/use-video-processing';
+import { Idea } from '@/lib/api/client';
 
 interface LeftSidebarProps {
   selectedIdea: string | null;
   onSelectIdea: (id: string) => void;
   projectId?: string | null;
+  // Video processing state from parent (single source of truth)
+  videoId: string | null;
+  videoStreamUrl: string | null;
+  status: string | null;
+  progress: number;
+  currentStage: string | null;
+  message: string | null;
+  ideas: Idea[];
+  isLoading: boolean;
+  isProcessing: boolean;
+  isComplete: boolean;
+  error: string | null;
+  submitVideo: (url: string, mode?: string) => Promise<void>;
+  reset: () => void;
 }
 
 const OTHER_TOPICS = [
@@ -22,30 +36,29 @@ const OTHER_TOPICS = [
   'Results Summary',
 ];
 
-export function LeftSidebar({ selectedIdea, onSelectIdea, projectId }: LeftSidebarProps) {
+export function LeftSidebar({
+  selectedIdea,
+  onSelectIdea,
+  projectId,
+  // Video processing state from parent
+  videoId,
+  videoStreamUrl,
+  status,
+  progress,
+  currentStage,
+  message,
+  ideas,
+  isLoading,
+  isProcessing,
+  isComplete,
+  error,
+  submitVideo,
+  reset,
+}: LeftSidebarProps) {
   const [activeTab, setActiveTab] = useState<'upload' | 'ideas' | 'edit' | 'transitions' | 'subtitles' | 'export'>('upload');
   const [isGistExpanded, setIsGistExpanded] = useState(true);
   const [isOtherExpanded, setIsOtherExpanded] = useState(true);
   const [subtitlesEnabled, setSubtitlesEnabled] = useState(true);
-
-  // Video processing hook
-  const {
-    videoId,
-    videoUrl,
-    videoStreamUrl,
-    videoDuration,
-    videoTitle,
-    status,
-    progress,
-    currentStage,
-    message,
-    ideas,
-    isProcessing,
-    isComplete,
-    error,
-    submitVideo,
-    reset,
-  } = useVideoProcessing(projectId);
 
   // Handle YouTube URL submission
   const handleVideoSubmit = async (url: string) => {
@@ -98,8 +111,18 @@ export function LeftSidebar({ selectedIdea, onSelectIdea, projectId }: LeftSideb
         <div className="p-4">
           {activeTab === 'upload' && (
             <div className="space-y-4">
-              {/* Show upload form if no video or after reset */}
-              {!videoId && !isProcessing && (
+              {/* CRITICAL: Show loading state while fetching initial data */}
+              {isLoading && (
+                <div className="rounded-lg border border-border bg-secondary/30 p-8">
+                  <div className="flex flex-col items-center justify-center gap-3">
+                    <Loader2 className="h-8 w-8 animate-spin text-primary" />
+                    <p className="text-sm text-muted-foreground">Loading project data...</p>
+                  </div>
+                </div>
+              )}
+
+              {/* Show upload form ONLY after loading completes AND no video exists */}
+              {!isLoading && !videoId && !isProcessing && (
                 <VideoUpload onVideoSubmit={handleVideoSubmit} />
               )}
 

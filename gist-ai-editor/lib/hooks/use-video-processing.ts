@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { videoApi, Idea, StatusResponse } from '../api/client';
+import { supabase } from '../supabase';
 
 export interface UseVideoProcessingReturn {
   // State
@@ -13,6 +14,7 @@ export interface UseVideoProcessingReturn {
   currentStage: string | null;
   message: string | null;
   ideas: Idea[];
+  isLoading: boolean;  // CRITICAL: Distinguishes "haven't fetched" from "fetched and empty"
   isProcessing: boolean;
   isComplete: boolean;
   error: string | null;
@@ -48,6 +50,10 @@ export function useVideoProcessing(projectId: string | null = null): UseVideoPro
   const [message, setMessage] = useState<string | null>(null);
   const [ideas, setIdeas] = useState<Idea[]>([]);
   const [error, setError] = useState<string | null>(null);
+  
+  // CRITICAL: Track loading state separately from processing state
+  // true = still fetching initial data, false = fetch complete (data may or may not exist)
+  const [isLoading, setIsLoading] = useState<boolean>(!!projectId);
 
   const wsRef = useRef<WebSocket | null>(null);
   const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
@@ -85,6 +91,27 @@ export function useVideoProcessing(projectId: string | null = null): UseVideoPro
 
   // Restore state from localStorage on mount
   useEffect(() => {
+    // CRITICAL: Wait for Supabase session restoration before making API calls
+    let authCheckTimeout: NodeJS.Timeout;
+    
+    const waitForAuth = async () => {
+      // Wait up to 2 seconds for session to be available
+      const maxWaitTime = 2000;
+      const startTime = Date.now();
+      
+      while (Date.now() - startTime < maxWaitTime) {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (session?.access_token) {
+          console.log('✅ Auth session ready, proceeding with data load');
+          return true;
+        }
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+      
+      console.warn('⚠️ Auth session not ready after 2s, user may need to log in');
+      return false;
+    };
+    
     const clearStorageIfNeeded = () => {
       const storageKey = getStorageKey(projectId);
       const stored = localStorage.getItem(storageKey);
@@ -109,6 +136,12 @@ export function useVideoProcessing(projectId: string | null = null): UseVideoPro
     clearStorageIfNeeded(); // Call it immediately
 
     const restoreState = async () => {
+      // GATE: Wait for auth to be ready before making API calls
+      const authReady = await waitForAuth();
+      if (!authReady) {
+        console.log('Skipping state restoration - user not authenticated');
+        return;
+      }
       const storageKey = getStorageKey(projectId);
       const stored = localStorage.getItem(storageKey);
       if (!stored) return;
@@ -169,7 +202,16 @@ export function useVideoProcessing(projectId: string | null = null): UseVideoPro
               pollStatus(state.videoId);
             }, 2000);
           }
-        } catch (err) {
+        } catch (err: any) {
+          // CRITICAL: Distinguish auth errors from actual errors
+          const errorMessage = err?.message || String(err);
+          
+          if (errorMessage.includes('Not authenticated') || errorMessage.includes('Session expired')) {
+            console.log('⚠️ Auth not ready during state restoration, skipping');
+            localStorage.removeItem(storageKey);
+            return; // Exit without treating as error
+          }
+          
           console.error('Failed to restore video state:', err);
           localStorage.removeItem(storageKey);
         }
@@ -180,6 +222,13 @@ export function useVideoProcessing(projectId: string | null = null): UseVideoPro
     };
 
     const loadExistingVideo = async () => {
+      // GATE: Wait for auth to be ready before making API calls
+      const authReady = await waitForAuth();
+      if (!authReady) {
+        console.log('Skipping video load - user not authenticated');
+        return;
+      }
+      
       const storageKey = getStorageKey(projectId);
       const stored = localStorage.getItem(storageKey);
       
@@ -243,18 +292,50 @@ export function useVideoProcessing(projectId: string | null = null): UseVideoPro
                 pollStatus(video.id);
               }, 2000);
             }
+            // Loading complete - data found
+            setIsLoading(false);
           } else {
             console.log('No video found for project:', projectId);
+            // Loading complete - no data found
+            setIsLoading(false);
           }
-        } catch (err) {
-          // Project doesn't exist or error loading - that's fine, user can upload new one
+        } catch (err: any) {
+          // CRITICAL: Distinguish auth errors from "no data" errors
+          const errorMessage = err?.message || String(err);
+          
+          if (errorMessage.includes('Not authenticated') || errorMessage.includes('Session expired')) {
+            // Auth error - don't treat as "no data", session not ready yet
+            console.log('⚠️ Auth not ready, skipping project load (will retry after session restoration)');
+            return; // Exit without setting error state
+          }
+          
+          // Actual "no data" or other error
           console.log('No existing project/video found:', projectId, err);
+          setIsLoading(false);
         }
+      } else {
+        // No projectId provided - nothing to load
+        setIsLoading(false);
       }
     };
 
-    restoreState();
-    loadExistingVideo();
+    // CRITICAL: Run initialization sequentially, not in parallel
+    const initialize = async () => {
+      // Step 1: Wait for auth to be ready
+      const authReady = await waitForAuth();
+      if (!authReady) {
+        console.log('⚠️ Auth not ready, skipping data load');
+        return;
+      }
+      
+      // Step 2: Restore state from localStorage (if exists)
+      await restoreState();
+      
+      // Step 3: Load existing video from API (if projectId provided)
+      await loadExistingVideo();
+    };
+
+    initialize();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]); // Re-run when projectId changes
 
@@ -467,6 +548,7 @@ export function useVideoProcessing(projectId: string | null = null): UseVideoPro
     currentStage,
     message,
     ideas,
+    isLoading,
     isProcessing,
     isComplete,
     error,
