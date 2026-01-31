@@ -1,28 +1,41 @@
 'use client';
 
-import { Sparkles, Zap, TrendingUp } from 'lucide-react';
+import { useState } from 'react';
+import { Sparkles, Zap, TrendingUp, ChevronDown, ChevronUp, Clock, Film } from 'lucide-react';
+
+interface TimeRange {
+  start: number;
+  end: number;
+  confidence?: number;
+}
 
 interface IdeaCardProps {
   title: string;
   reason: string;
+  description?: string;
   rank: number;
   isSelected: boolean;
   onClick: () => void;
   strength?: 'high' | 'medium' | 'low';
   highlights?: string[];
   viralPotential?: string;
+  timeRanges?: TimeRange[];
 }
 
 export function IdeaCard({
   title,
   reason,
+  description,
   rank,
   isSelected,
   onClick,
   strength = 'medium',
   highlights = [],
   viralPotential,
+  timeRanges = [],
 }: IdeaCardProps) {
+  const [isExpanded, setIsExpanded] = useState(false);
+
   // Strength indicator configuration
   const strengthConfig = {
     high: {
@@ -48,14 +61,21 @@ export function IdeaCard({
   const config = strengthConfig[strength];
   const StrengthIcon = config.icon;
 
+  // Calculate total duration from time ranges
+  const totalDuration = timeRanges.reduce((acc, range) => acc + (range.end - range.start), 0);
+  const formatDuration = (seconds: number) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = Math.floor(seconds % 60);
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
+  };
+
   // Highlight key phrases in title
   const renderHighlightedTitle = () => {
     if (highlights.length === 0) {
       return <span>{title}</span>;
     }
 
-    let highlightedTitle = title;
-    const parts: { text: string; isHighlight: boolean }[] = [];
+    let parts: { text: string; isHighlight: boolean }[] = [];
     let lastIndex = 0;
 
     highlights.forEach((highlight) => {
@@ -91,10 +111,21 @@ export function IdeaCard({
     );
   };
 
+  // Handle keyboard interaction for card selection
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      onClick();
+    }
+  };
+
   return (
-    <button
+    <div
+      role="button"
+      tabIndex={0}
       onClick={onClick}
-      className={`group w-full rounded-lg border-2 transition-all duration-200 ${
+      onKeyDown={handleKeyDown}
+      className={`group w-full rounded-lg border-2 transition-all duration-200 cursor-pointer ${
         isSelected
           ? 'border-primary bg-primary/5 shadow-md'
           : 'border-border bg-secondary hover:border-primary/30 hover:bg-secondary/80 hover:shadow-sm'
@@ -115,25 +146,60 @@ export function IdeaCard({
 
           {/* Content */}
           <div className="flex-1 min-w-0 text-left space-y-2">
-            {/* Title with Highlights */}
+            {/* Title with Highlights - TRUNCATED TO 2 LINES */}
             <p className="text-sm font-medium text-foreground leading-snug line-clamp-2">
               {renderHighlightedTitle()}
             </p>
 
-            {/* Strength Indicator & Reason */}
-            <div className="flex flex-wrap items-center gap-2">
-              {/* Strength Badge */}
-              <div className={`inline-flex items-center gap-1.5 rounded-full border ${config.borderColor} ${config.color} px-2.5 py-1 text-xs font-semibold`}>
-                <StrengthIcon className="h-3 w-3" />
-                <span>{config.label}</span>
+            {/* Metadata Row */}
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+              <span className="font-medium">#{rank}</span>
+              <span>•</span>
+              <div className="flex items-center gap-1">
+                <Film className="h-3 w-3" />
+                <span>{timeRanges.length} segment{timeRanges.length !== 1 ? 's' : ''}</span>
               </div>
-
-              {/* Reason Badge */}
-              <div className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2.5 py-1 text-xs text-primary font-medium">
-                <Sparkles className="h-3 w-3" />
-                <span>{reason}</span>
-              </div>
+              {totalDuration > 0 && (
+                <>
+                  <span>•</span>
+                  <div className="flex items-center gap-1">
+                    <Clock className="h-3 w-3" />
+                    <span>{formatDuration(totalDuration)}</span>
+                  </div>
+                </>
+              )}
             </div>
+
+            {/* Description - COLLAPSIBLE */}
+            {description && (
+              <div className="space-y-1">
+                <p className={`text-xs text-muted-foreground leading-relaxed ${!isExpanded ? 'line-clamp-3' : ''}`}>
+                  {description}
+                </p>
+                {description.length > 150 && (
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setIsExpanded(!isExpanded);
+                    }}
+                    className="flex items-center gap-1 text-xs text-primary hover:underline font-medium"
+                  >
+                    {isExpanded ? (
+                      <>
+                        <ChevronUp className="h-3 w-3" />
+                        Show less
+                      </>
+                    ) : (
+                      <>
+                        <ChevronDown className="h-3 w-3" />
+                        Read more
+                      </>
+                    )}
+                  </button>
+                )}
+              </div>
+            )}
+
 
             {/* Viral Potential Indicator */}
             {viralPotential && (
@@ -145,6 +211,6 @@ export function IdeaCard({
           </div>
         </div>
       </div>
-    </button>
+    </div>
   );
 }

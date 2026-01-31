@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Upload, BookOpen, Sparkles, Zap, Type, Settings, Wand2, Download, Share2, Scissors, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -70,6 +70,13 @@ export function LeftSidebar({
     reset();
     setActiveTab('upload');
   };
+
+  // Auto-switch to ideas tab when processing completes
+  useEffect(() => {
+    if (isComplete && ideas.length > 0 && activeTab === 'upload') {
+      setActiveTab('ideas');
+    }
+  }, [isComplete, ideas.length, activeTab]);
 
   const tabs = [
     { id: 'upload', label: 'Upload', icon: Upload },
@@ -223,12 +230,14 @@ export function LeftSidebar({
                           key={idea.id}
                           title={idea.title}
                           reason={idea.reason}
+                          description={idea.description}
                           rank={idea.rank}
                           isSelected={selectedIdea === idea.id}
                           onClick={() => onSelectIdea(idea.id)}
                           strength={idea.strength}
                           highlights={idea.highlights}
                           viralPotential={idea.viral_potential || ''}
+                          timeRanges={idea.time_ranges}
                         />
                       ))
                     ) : (

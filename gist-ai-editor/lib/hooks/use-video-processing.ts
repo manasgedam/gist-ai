@@ -238,8 +238,10 @@ export function useVideoProcessing(projectId: string | null = null): UseVideoPro
           console.log('🔍 Loading project details from API:', projectId);
           const details = await videoApi.getProjectDetails(projectId);
           
-          if (details && details.video) {
-            const video = details.video;
+          // CRITICAL FIX: API returns `videos` (array), not `video` (singular)
+          // Access the first video from the array
+          if (details && details.videos && details.videos.length > 0) {
+            const video = details.videos[0];  // Get first video from array
             const ideas = details.ideas || [];
             
             console.log('✅ Found project with video, loading data...');

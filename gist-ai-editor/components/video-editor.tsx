@@ -2,7 +2,7 @@
 
 import React from "react"
 
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useCallback, useMemo, useEffect } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { FileUp, Share2, Download, Play, Pause, Volume2, SkipBack, SkipForward } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -80,6 +80,13 @@ export function VideoEditor() {
   if (videoTitle && projectName === 'Untitled Project') {
     setProjectName(videoTitle);
   }
+
+  // Debug: Log video stream URL changes
+  useEffect(() => {
+    if (videoStreamUrl) {
+      console.log('🎥 Video stream URL updated:', videoStreamUrl);
+    }
+  }, [videoStreamUrl]);
 
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-background">

@@ -16,6 +16,7 @@ export interface Idea {
   rank: number;
   title: string;
   reason: string;
+  description: string;
   strength: 'high' | 'medium' | 'low';
   viral_potential?: string;
   highlights: string[];
